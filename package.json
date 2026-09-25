@@ -18,13 +18,17 @@
   "build": {
     "appId": "com.kaseki.launchk",
     "productName": "Launch-K",
+    "asarUnpack": [
+      "node_modules/koffi/**/*"
+    ],
     "files": [
       "**/*",
       "!dist/**"
     ],
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
