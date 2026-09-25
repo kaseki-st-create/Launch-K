@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: file:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
+<title>Launch-K</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg1: #14161B;
+    --bg2: #111319;
+    --panel: #1D2129;
+    --panel-alt: #262B35;
+    --panel-solid: #1D2129;
+    --panel-alt-solid: #262B35;
+    --border: #2B303A;
+    --text: #EDEFF2;
+    --text-muted: #8B92A0;
+    --text-dim: #B7BEC9;
+    --accent: #FFB238;
+    --accent-contrast: #14161B;
+    --icon-size: 40px;
+    --tile-radius: 18px;
+    --icon-radius: 12px;
+    --icon-ring-color: transparent;
+    --bg-image: none;
+    --bg-size: cover;
+    --bg-repeat: no-repeat;
+    --bg-brightness: 1;
+    --pager-outline-rgb: 0, 0, 0;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: linear-gradient(180deg, var(--bg1) 0%, var(--bg2) 100%);
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+  }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  /* ボタンの視認性を上げるため、画面の縦横上下ギリギリまでグリッドを寄せる */
+  #app { padding: 12px 12px 4px 12px; min-height: 100%; position: relative; z-index: 1; }
+  /* 画像背景の明るさだけを個別に調整できるよう、専用の背景レイヤーをbodyの疑似要素として敷く。
+     フィルターをbody本体にかけるとタイル・文字までぼやけて/暗くなってしまうため、
+     画像だけをこの層に持たせ、他の内容（#app、z-index:1）はその上に重ねる。 */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background-image: var(--bg-image);
+    background-size: var(--bg-size);
+    background-repeat: var(--bg-repeat);
+    background-position: center;
+    filter: brightness(var(--bg-brightness));
+    pointer-events: none;
+  }
+
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 12px;
+    /* 右上固定のロック・ハンバーガーボタンと重ならないよう余白を確保。
+       ロックボタンの左端（右から 22px＋ボタン2つ分）＋ 10px の最小距離だけ空ける
+       （以前は固定110pxで、ボタンが小さいときほど無駄に広く空いていた）。 */
+    padding-right: calc(32px + var(--top-btn-size) * 2);
+  }
+  /* タイトルを非表示にしているとき、ページ切替が無くても右上の固定ボタンと
+     高さを揃えて、下のボタン群と重ならないよう最低限の高さを確保する。 */
+  /* さらに、ロック・ハンバーガー（ページ切替）の下端からボタン群までの距離を6.5pxにする。 */
+  .header.no-title { min-height: var(--top-btn-size); margin-bottom: 6.5px; }
+  .eyebrow { font-size: 12px; letter-spacing: 2px; color: var(--text-muted); }
+  /* ウィンドウ幅が狭いときは自動的に小さく表示し、グリッド側に使える幅を確保する */
+  h1 {
+    font-size: clamp(15px, 4.2vw, 26px);
+    font-weight: 700;
+    margin: 2px 0 0;
+    white-space: nowrap;
+    /* 黒でやわらかく縁取り（複数方向にじませたtext-shadowで縁取り風にする） */
+    text-shadow:
+      -0.5px -0.5px 0 rgba(0,0,0,0.75),
+       0.5px -0.5px 0 rgba(0,0,0,0.75),
+      -0.5px  0.5px 0 rgba(0,0,0,0.75),
+       0.5px  0.5px 0 rgba(0,0,0,0.75);
+  }
+
+  /* ハンバーガーメニュー・ロックボタン・ページ切替ボタンは、現状の36px
+     （フォントサイズ16px）を上限として、ウィンドウ幅が狭くなるほど自動的に
+     それより小さくなるようにする。GUIが窮屈にならない下限として26px/12pxを設ける。 */
+  :root { --top-btn-size: clamp(26px, 4.2vw, 36px); }
+
+  /* サブページ切替（◀ 1 / 2 ▶）は、ハンバーガー・ロック（--top-btn-size、下限26px）とは別に、
+     もっと小さい下限（16px）を持つ --pager-btn-size を基準にする。横幅が足りない狭いウィンドウでは
+     下限26pxで止まるハンバーガー・ロックより先に縮み続けられるようにして、右上の固定ボタン群と
+     重ならないようにするため。 */
+  :root { --pager-btn-size: clamp(16px, 4.2vw, 36px); }
+
+  .header-pager { display: flex; align-items: center; gap: calc(var(--pager-btn-size) * 0.33); }
+  .header-pager .pager-btn {
+    width: calc(var(--pager-btn-size) * 1.9); height: var(--pager-btn-size);
+    padding: 0; border-radius: 10px; flex: none;
+    font-size: calc(var(--pager-btn-size) * 0.44); line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+  }
+  .header-pager .pager-count {
+    font-size: calc(var(--pager-btn-size) * 0.34); color: var(--text-muted); white-space: nowrap;
+    height: var(--pager-btn-size); padding: 0 calc(var(--pager-btn-size) * 0.3);
+    display: flex; align-items: center; justify-content: center;
+    /* 画像背景の上でも数字が読めるよう、ボタンと同じ枠色の背景を敷いた上で、
+       文字の輪郭にも影を重ねて縁取りのように見せる（透明度スライダーで枠が
+       薄くされていても、文字自体はできるだけ読めるようにするため）。 */
+    background: var(--panel-solid); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+    /* 縁取りの色は明るいテーマでも見づらくならないよう、テーマに応じて黒/白を
+       JS側（--pager-outline-rgb）で切り替える。 */
+    text-shadow: -1px -1px 1px rgba(var(--pager-outline-rgb),0.85), 1px -1px 1px rgba(var(--pager-outline-rgb),0.85),
+                 -1px 1px 1px rgba(var(--pager-outline-rgb),0.85), 1px 1px 1px rgba(var(--pager-outline-rgb),0.85);
+  }
+
+  .hamburger-btn {
+    position: fixed; top: 12px; right: 14px; z-index: 40;
+    width: var(--top-btn-size); height: var(--top-btn-size); border-radius: 10px;
+    background: var(--panel-solid); border: 1px solid var(--border);
+    color: var(--text); font-size: calc(var(--top-btn-size) * 0.44); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+  }
+
+  .lock-btn {
+    position: fixed; top: 12px; right: calc(14px + var(--top-btn-size) + 8px); z-index: 40;
+    width: var(--top-btn-size); height: var(--top-btn-size); border-radius: 10px;
+    background: var(--panel-solid); border: 1px solid var(--border);
+    color: var(--text-muted); font-size: calc(var(--top-btn-size) * 0.44); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+  }
+  .lock-btn.active {
+    background: var(--accent); border-color: var(--accent); color: var(--accent-contrast);
+  }
+
+  /* ハンバーガーメニュー内「影を付ける」トグルがOFFのとき、主要ボタン群の影を消す */
+  body.no-btn-shadow .tile,
+  body.no-btn-shadow .hamburger-btn,
+  body.no-btn-shadow .lock-btn,
+  body.no-btn-shadow .header-pager .pager-btn,
+  body.no-btn-shadow .header-pager .pager-count {
+    box-shadow: none;
+  }
+  body.no-btn-shadow .tile:active {
+    box-shadow: none;
+  }
+
+  .grid {
+    display: grid;
+    gap: 9px 11px; /* 上下（行間）9px・左右（列間）11px。renderer.jsのGRID_ROW_GAP/GRID_GAPと必ず一致させること */
+    /* レイアウト計算で画面に収まる列数・行数・サイズを出しているため、
+       基本的にスクロールは発生しない想定。丸め誤差などで僅かに
+       あふれた場合の保険としてoverflow autoは残すが、
+       スクロールバー自体は視認性を下げるため見た目上は非表示にする。 */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding-bottom: 0;
+  }
+  .grid::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+  .tile-wrap { position: relative; }
+  .tile-wrap.busy .tile { opacity: 0.55; pointer-events: none; cursor: default; }
+
+  /* マルチ操作の実行中は、実行中のボタン以外の全ボタン（他ページの別画面も含む）と
+     ページ切替を操作できないようにする（全ウィンドウへブロードキャストされるクラス）。 */
+  body.global-busy .tile-wrap:not(.busy) .tile { opacity: 0.55; pointer-events: none; cursor: default; }
+  body.global-busy .add-tile { opacity: 0.55; pointer-events: none; cursor: default; }
+  body.global-busy .page-tab { opacity: 0.55; pointer-events: none; cursor: default; }
+  .tile {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: var(--tile-radius);
+    background: linear-gradient(160deg, var(--panel-alt), var(--panel));
+    /* --tile-border-colorは通常時var(--border)と同じだが、「アイコンボタン裏の枠の透明度」が
+       0%のときだけJS側（applyTheme）でtransparentにする（枠外に薄い線だけ残って見えるのを防ぐため）。 */
+    border: 1px solid var(--tile-border-color, var(--border));
+    box-shadow: 0 6px 0 rgba(0,0,0,0.35), 0 10px 18px rgba(0,0,0,0.25);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0; /* 要素どうしの間隔は下の .tile-name / .tile-hotkey のmargin-topで個別に指定 */
+    cursor: pointer;
+    padding: 6px;
+    color: inherit;
+    font: inherit;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+    user-select: none;
+  }
+  .tile:active {
+    transform: translateY(4px);
+    box-shadow: inset 0 2px 6px rgba(0,0,0,0.35);
+  }
+  .tile-icon-wrap { position: relative; }
+  .tile-icon {
+    width: var(--icon-size); height: var(--icon-size); border-radius: var(--icon-radius);
+    display: flex; align-items: center; justify-content: center;
+    font-size: calc(var(--icon-size) * 0.64);
+    overflow: hidden;
+    /* テーマカラーとアイコンの色が近いと境目が分からなくなることがあるため、
+       常に薄いリングを付けてアイコンチップの輪郭が背景から見分けられるようにする。
+       さらに --icon-ring-color は、画像背景などでアイコンが見づらいときのために
+       ユーザーが明暗度・オンオフを設定できる「囲み線」（ハンバーガーメニュー→見た目）。 */
+    box-shadow: 0 0 0 1px var(--icon-ring-color),
+                inset 0 0 0 1px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(255,255,255,0.10);
+  }
+  .tile-icon img { width: var(--icon-size); height: var(--icon-size); border-radius: var(--icon-radius); object-fit: cover; }
+  .tile-icon-emoji, .tile-icon > span {
+    /* グリフの色がテーマ色に近くても読み取れるよう、常に軽い縁取りを付ける。 */
+    text-shadow: 0 1px 1px rgba(0,0,0,0.3), 0 0 6px rgba(0,0,0,0.12);
+  }
+  .tile-icon-emoji {
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 100%;
+    line-height: 1.05; text-align: center;
+    white-space: normal; word-break: break-word; overflow: hidden;
+  }
+
+  .tile-name {
+    font-size: 12.5px; color: var(--text); opacity: 0.85; text-align: center;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+  }
+  /* アイコンと名前の間：4px ／ 名前とショートカットキーの間：3.5px
+     （名前を非表示にしているときは、アイコンとショートカットキーの間を4pxにする） */
+  .tile-icon-wrap + .tile-name, .tile-icon-wrap + .tile-hotkey { margin-top: 4px; }
+  .tile-name + .tile-hotkey { margin-top: 3.5px; }
+  .tile-hotkey {
+    font-size: 9.5px; color: var(--text-muted); opacity: 0.7; text-align: center;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+  }
+
+  .tile-actions {
+    position: absolute; top: 6px; right: 6px; display: none; gap: 6px; z-index: 20;
+  }
+  .tile-wrap:hover .tile-actions { display: flex; }
+  .icon-btn {
+    /* 編集・削除ボタンは、現状の27px（フォントサイズ13px）を上限として、
+       ウィンドウサイズやタイル自体の大きさ（--tile-size、renderGridで設定）に
+       応じて自動的にそれより小さくなるようにする。GUIが崩れない下限として16px/9pxを設ける。 */
+    width: clamp(16px, calc(var(--tile-size, 96px) * 0.28), 27px);
+    height: clamp(16px, calc(var(--tile-size, 96px) * 0.28), 27px);
+    border-radius: 8px;
+    background: rgba(18,19,23,0.94); border: 1px solid rgba(255,255,255,0.22);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: #F5F6F8;
+    font-size: clamp(9px, calc(var(--tile-size, 96px) * 0.135), 13px);
+    box-shadow: 0 3px 8px rgba(0,0,0,0.45);
+  }
+  /* ボタンが小さいとき：編集・削除を縦に並べて右端に寄せ、アイコン中央を覆わないようにする */
+  .grid.compact-tiles .tile-actions { flex-direction: column; align-items: flex-end; top: 3px; right: 3px; gap: 2px; }
+  /* 削除ボタンだけは下限を14pxにする（上限27px・タイル比28%で自動的に変わる点は編集ボタンと同じ） */
+  .icon-btn.danger {
+    width: clamp(14px, calc(var(--tile-size, 96px) * 0.28), 27px);
+    height: clamp(14px, calc(var(--tile-size, 96px) * 0.28), 27px);
+  }
+  /* 縦並び（ボタンが小さいとき）は、編集は最小16px〜最大24px、削除は常に編集より2px小さく（最小14px〜最大22px）する。
+     タイルが約57px以上だと両方とも「タイル比28%」で同じ大きさになり、赤い削除ボタンのほうが
+     大きく見えてしまっていたため、差を必ず付ける。 */
+  .grid.compact-tiles .icon-btn {
+    width: clamp(16px, calc(var(--tile-size, 96px) * 0.28), 24px);
+    height: clamp(16px, calc(var(--tile-size, 96px) * 0.28), 24px);
+  }
+  .grid.compact-tiles .icon-btn.danger {
+    width: calc(clamp(16px, calc(var(--tile-size, 96px) * 0.28), 24px) - 2px);
+    height: calc(clamp(16px, calc(var(--tile-size, 96px) * 0.28), 24px) - 2px);
+  }
+  .icon-btn.danger { background: rgba(255,107,94,0.85); border-color: rgba(255,107,94,0.9); color: #1A1A1A; }
+
+  .add-tile {
+    aspect-ratio: 1 / 1;
+    border-radius: var(--tile-radius);
+    background: transparent;
+    border: 2px dashed var(--border);
+    color: var(--text-muted);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; cursor: pointer; font: inherit;
+  }
+
+  .empty-hint {
+    background: var(--panel-solid); border: 1px dashed var(--border); color: var(--text-muted);
+    border-radius: 16px; padding: 18px; margin-bottom: 20px; font-size: 14px;
+  }
+
+  .overlay {
+    position: fixed; inset: 0; background: rgba(10,11,14,0.55);
+    display: none; align-items: center; justify-content: center; z-index: 50; padding: 16px;
+  }
+  .overlay.show { display: flex; }
+  /* 確認・編集用のモーダル（#overlay）は、設定パネル（ハンバーガーメニュー）を
+     閉じなくても常に手前に表示されるよう、重なり順を一段高くしておく。
+     例：設定パネルを開いたまま「すべて初期化する」を押しても、確認画面がすぐ見える。 */
+  #overlay { z-index: 55; }
+  .modal {
+    background: var(--panel-solid); border: 1px solid var(--border); border-radius: 18px;
+    padding: 22px; width: 380px; max-width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    color: var(--text);
+    max-height: 85vh; overflow-y: auto;
+  }
+  .modal.wide { width: 440px; }
+  .field-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; letter-spacing: 0.5px; }
+  input[type=text], input[type=url] {
+    width: 100%; background: var(--panel-alt-solid); border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 12px; color: var(--text); font-size: 13px; margin-bottom: 14px; outline: none;
+    font-family: inherit;
+  }
+  .type-row, .icon-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .opt-btn {
+    display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 9px;
+    background: var(--panel-alt-solid); border: 1px solid var(--border); color: var(--text-muted); font-size: 12px; cursor: pointer;
+  }
+  .opt-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+
+  /* 「種類」選択用トリガーボタン（選択肢が多いため、一覧を並べず、
+     押すと選択ダイアログ（#typeSelectOverlay）が開く単一のボタンにしている） */
+  .type-select-trigger {
+    display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 9px;
+    background: var(--panel-alt-solid); border: 1px solid var(--border); color: var(--text); font-size: 13px;
+    cursor: pointer; font-family: inherit; width: 100%; text-align: left; justify-content: space-between;
+  }
+  .type-select-trigger:hover { border-color: var(--accent); }
+  .type-select-trigger .type-select-trigger-caret { color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+  .type-select-trigger.mini { width: auto; padding: 5px 9px; font-size: 11px; gap: 6px; }
+
+  /* 「種類」選択ダイアログ本体 */
+  #typeSelectOverlay { z-index: 58; }
+  .type-select-modal { width: 300px; }
+  .type-select-list { display: flex; flex-direction: column; gap: 2px; max-height: 50vh; overflow-y: auto; margin-bottom: 14px; }
+  .type-select-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 10px; border-radius: 9px;
+    cursor: pointer; font-size: 13px; color: var(--text);
+  }
+  .type-select-item:hover { background: var(--panel-alt-solid); }
+  .type-select-item.active { color: var(--accent); font-weight: 600; }
+  .type-select-item .type-select-check { width: 16px; flex-shrink: 0; text-align: center; color: var(--accent); font-size: 13px; }
+  .color-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .color-dot {
+    width: 24px; height: 24px; border-radius: 50%; cursor: pointer;
+    /* 白系の色を選んでも周囲との境目が分かるよう、外側に暗め・内側に明るめの
+       薄いリングを常時つけておく（テーマが明るい／暗いどちらでも見分けられる）。 */
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.3);
+  }
+  /* border-colorだけだと白を選んだときに枠との境目が分からなくなるため、
+     どの色でも見分けられるようアクセントカラーの外側リングを追加する。 */
+  .color-dot.active {
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.3), 0 0 0 3px var(--accent);
+  }
+  .checkbox-row {
+    display: flex; align-items: center; gap: 8px; margin: 10px 0 14px; font-size: 12.5px; color: var(--text-muted); cursor: pointer;
+  }
+  .checkbox-row input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+
+  /* 行数・列数の設定用スピナー（数値＋上下矢印）。「自動」ボタンと並べて使う。 */
+  .spinner {
+    display: inline-flex; align-items: center; gap: 10px;
+    background: var(--panel-alt-solid); border: 1px solid var(--border); border-radius: 10px;
+    padding: 6px 12px; min-width: 56px; justify-content: space-between;
+  }
+  .spinner.is-auto { opacity: 0.55; }
+  .spinner-value { font-size: 14px; color: var(--text); min-width: 14px; text-align: center; }
+  .spinner-arrows { display: flex; flex-direction: column; line-height: 1; cursor: pointer; }
+  .spinner-arrow { font-size: 8px; color: var(--text-muted); padding: 2px 3px; user-select: none; }
+  .spinner-arrow:hover { color: var(--accent); }
+  .file-pick-btn {
+    display: inline-flex; align-items: center; gap: 6px; background: var(--panel-alt-solid); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 12px; color: var(--text); font-size: 12px; cursor: pointer; margin-bottom: 10px;
+    /* 絵文字アイコン（🎵など）が暗いテーマの背景に沈んで見えにくくならないよう、
+       常にわずかな縁取りを付けて周囲とのコントラストを保つ */
+    text-shadow: 0 0 1px rgba(255,255,255,0.55), 0 0 1px rgba(255,255,255,0.55);
+  }
+  .path-preview {
+    font-size: 11px; color: var(--text-dim, var(--text-muted)); margin-bottom: 14px; word-break: break-all;
+  }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .btn { border: none; border-radius: 10px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .btn.primary { background: var(--accent); color: var(--accent-contrast); }
+  .btn.default { background: var(--panel-alt-solid); color: var(--text); }
+  .btn.danger { background: #FF6B5E; color: #14161B; }
+  .btn.default.at-max { color: var(--text-muted); }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+
+  /* ---------- マルチ操作：サブ動作の編集リスト ---------- */
+  .multi-sub-row {
+    border: 1px solid var(--border); border-radius: 12px; background: var(--panel-alt-solid);
+    padding: 8px 10px; margin-bottom: 8px;
+  }
+  .multi-sub-row.dragging { opacity: 0.45; }
+  .multi-sub-row.drag-over { outline: 2px dashed var(--accent); outline-offset: 1px; }
+  .multi-sub-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .multi-sub-row .act-index { font-size: 11px; color: var(--text-muted); width: 16px; text-align: right; flex-shrink: 0; }
+  .multi-sub-row .drag-handle {
+    cursor: grab; color: var(--text-muted); font-size: 14px; flex-shrink: 0; line-height: 1; user-select: none;
+  }
+  .multi-sub-row .drag-handle:active { cursor: grabbing; }
+  .type-row.mini { gap: 5px; margin-bottom: 0; }
+  .opt-btn.mini { padding: 5px 9px; font-size: 11px; }
+  .multi-sub-fields { padding-left: 24px; }
+  .multi-sub-fields input[type=text], .multi-sub-fields input[type=url] { margin-bottom: 0; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: var(--panel-alt-solid); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 16px; border-radius: 12px; font-size: 13px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 60; display: none;
+  }
+  .toast.show { display: block; }
+
+  .icon-emoji-input { width: 100%; margin-bottom: 14px; }
+  .icon-preview-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+
+  /* CSSアイコン一覧のカテゴリ見出し（クリックで開閉） */
+  .icon-group-header {
+    display: flex; align-items: center; justify-content: space-between; cursor: pointer;
+    padding: 9px 2px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted);
+    letter-spacing: 0.5px; user-select: none;
+  }
+  .icon-group-header:first-child { border-top: none; }
+  .icon-group-header:hover { color: var(--text); }
+  .icon-group-caret { font-size: 11px; transition: transform 120ms ease; display: inline-block; }
+  .icon-group-caret.open { transform: rotate(180deg); }
+
+  .settings-section { margin-bottom: 18px; }
+  .settings-section h3 { font-size: 12px; letter-spacing: 0.5px; color: var(--text-muted); margin: 0 0 10px; }
+  .theme-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
+  .theme-swatch {
+    width: 32px; height: 32px; border-radius: 50%; cursor: pointer; border: none; padding: 0;
+    /* 白系のテーマでも周囲との境目が分かるよう、外側に暗め・内側に明るめの薄いリングを常時つけておく
+       （テーマが明るい／暗いどちらでも見分けられる）。 */
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.3);
+  }
+  .theme-swatch.active {
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.3), 0 0 0 3px var(--accent);
+  }
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 13px; }
+  .link-row {
+    display: flex; align-items: center; gap: 8px; padding: 10px 4px; cursor: pointer;
+    color: var(--text-muted); font-size: 13px; border-top: 1px solid var(--border);
+  }
+  .link-row:hover { color: var(--text); }
+  .back-btn { font-size: 12px; color: var(--text-muted); cursor: pointer; margin-bottom: 12px; display: inline-block; }
+  .tos-scroll { max-height: 55vh; overflow-y: auto; padding-right: 6px; font-size: 13px; line-height: 1.7; color: var(--text-muted); }
+  .tos-scroll h4 { color: var(--text); font-size: 13px; margin: 14px 0 4px; }
+
+  .modal-panel { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+  .modal-panel .modal-scroll-body { padding: 22px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+  .modal-panel .modal-fixed-footer {
+    flex: 0 0 auto; display: flex; justify-content: flex-end;
+    padding: 12px 22px; border-top: 1px solid var(--border);
+  }
+  .modal-panel { transition: opacity 160ms ease; }
+  #settingsOverlay.peeking { background: rgba(10,11,14,0.06); transition: background 160ms ease; }
+  #settingsOverlay.peeking .modal-panel { opacity: 0.1; pointer-events: none; }
+
+  .page-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .page-tab {
+    min-width: 34px; height: 34px; padding: 0 10px; border-radius: 10px;
+    background: var(--panel-solid); border: 1px solid var(--border); color: var(--text-muted);
+    font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .page-tab.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+</style>
+</head>
+<body>
+  <button class="lock-btn" id="lockBtn" title="常に最前面に表示">🔓</button>
+  <button class="hamburger-btn" id="hamburgerBtn">☰</button>
+
+  <div id="app">
+    <div class="header">
+      <div>
+        <h1 id="appTitle">Launch-K</h1>
+      </div>
+      <div id="headerPager" class="header-pager" style="display:none;"></div>
+    </div>
+
+    <div id="emptyHint" class="empty-hint" style="display:none;">
+      まだボタンがありません。右下の「＋」から追加が可能です。
+    </div>
+
+    <div id="grid" class="grid"></div>
+  </div>
+
+  <div id="overlay" class="overlay">
+    <div class="modal" id="modalBody"></div>
+  </div>
+
+  <div id="typeSelectOverlay" class="overlay type-select-overlay">
+    <div class="modal type-select-modal">
+      <h2 style="font-size:15px;font-weight:700;margin-bottom:14px;">種類を選択</h2>
+      <div class="type-select-list" id="typeSelectList"></div>
+      <div class="modal-actions">
+        <button class="btn default" id="typeSelectCancelBtn">キャンセル</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsOverlay" class="overlay">
+    <div class="modal wide modal-panel">
+      <div class="modal-scroll-body" id="settingsBody"></div>
+      <div class="modal-fixed-footer"><button class="btn default" id="closeSettingsBtn">閉じる</button></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="vendor/qrcode.js"></script>
+  <script src="vendor/qrcode_UTF8.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

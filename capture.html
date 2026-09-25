@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
+<title>範囲選択</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; cursor: crosshair; user-select: none; }
+  #shot { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+  /* 選択前は画面全体を少し暗くする */
+  #dim { position: fixed; inset: 0; background: rgba(0,0,0,0.35); pointer-events: none; }
+  /* 選択範囲の外側だけを暗くする（box-shadowで範囲外を塗りつぶす） */
+  #sel {
+    position: fixed; display: none; box-sizing: border-box; pointer-events: none;
+    border: 2px solid #FFB238; box-shadow: 0 0 0 100vmax rgba(0,0,0,0.55);
+  }
+  #size {
+    position: absolute; left: 0; top: -24px; background: #FFB238; color: #14161B;
+    font: 600 11px 'Segoe UI', 'Yu Gothic UI', system-ui, sans-serif; padding: 2px 7px; border-radius: 6px; white-space: nowrap;
+  }
+  #hint {
+    position: fixed; top: 22px; left: 50%; transform: translateX(-50%); pointer-events: none;
+    background: rgba(20,22,27,0.9); color: #EDEFF2; border: 1px solid rgba(255,255,255,0.18);
+    font: 13px 'Segoe UI', 'Yu Gothic UI', system-ui, sans-serif; padding: 9px 16px; border-radius: 12px; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+  <img id="shot" alt="" draggable="false" />
+  <div id="dim"></div>
+  <div id="sel"><div id="size"></div></div>
+  <div id="hint"></div>
+<script>
+  const shot = document.getElementById("shot");
+  const dim = document.getElementById("dim");
+  const selEl = document.getElementById("sel");
+  const sizeEl = document.getElementById("size");
+  const hintEl = document.getElementById("hint");
+  const MIN_PX = 8; // これより小さい範囲はクリックのみとみなして無視する
+  let aspect = null; // 幅/高さ。nullなら自由な長方形
+  let start = null;
+  let cur = null;
+
+  function finish(rect) { captureApi.done(rect); }
+
+  captureApi.onInit((data) => {
+    aspect = data.aspect || null;
+    hintEl.textContent = data.hint || "ドラッグで範囲を選択　／　Enterで画面全体　／　Escでキャンセル";
+    shot.onload = () => captureApi.ready();
+    shot.src = data.image;
+  });
+
+  // 開始点(start)からポインタ(p)までの矩形。aspectがあるときは比率を保つ（Shift押下中は自由）。
+  function computeRect(p, free) {
+    const W = window.innerWidth, H = window.innerHeight;
+    let dx = p.x - start.x, dy = p.y - start.y;
+    if (aspect && !free) {
+      const sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
+      // 画面からはみ出さない最大の幅・高さ
+      const maxW = sx > 0 ? W - start.x : start.x;
+      const maxH = sy > 0 ? H - start.y : start.y;
+      let w = Math.max(Math.abs(dx), Math.abs(dy) * aspect);
+      w = Math.min(w, maxW, maxH * aspect);
+      dx = sx * w;
+      dy = sy * (w / aspect);
+    }
+    const x = Math.min(start.x, start.x + dx), y = Math.min(start.y, start.y + dy);
+    return { x, y, w: Math.abs(dx), h: Math.abs(dy) };
+  }
+
+  function draw(r) {
+    selEl.style.display = "block";
+    selEl.style.left = r.x + "px"; selEl.style.top = r.y + "px";
+    selEl.style.width = r.w + "px"; selEl.style.height = r.h + "px";
+    sizeEl.textContent = Math.round(r.w) + " × " + Math.round(r.h);
+    sizeEl.style.top = r.y < 30 ? (r.h + 4) + "px" : "-24px";
+  }
+
+  window.addEventListener("mousedown", (e) => {
+    if (e.button === 2) return finish(null);
+    if (e.button !== 0) return;
+    start = { x: e.clientX, y: e.clientY };
+    cur = null;
+    dim.style.display = "none";
+    hintEl.style.display = "none";
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!start) return;
+    cur = computeRect({ x: e.clientX, y: e.clientY }, e.shiftKey);
+    draw(cur);
+  });
+  window.addEventListener("mouseup", (e) => {
+    if (!start || e.button !== 0) return;
+    const r = computeRect({ x: e.clientX, y: e.clientY }, e.shiftKey);
+    start = null;
+    if (r.w < MIN_PX || r.h < MIN_PX) {
+      // 単なるクリック：選び直せるように状態を戻す
+      selEl.style.display = "none"; dim.style.display = "block"; hintEl.style.display = "block";
+      return;
+    }
+    const W = window.innerWidth, H = window.innerHeight;
+    finish({ x: r.x / W, y: r.y / H, w: r.w / W, h: r.h / H });
+  });
+  window.addEventListener("contextmenu", (e) => { e.preventDefault(); finish(null); });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") finish(null);
+    else if (e.key === "Enter") finish({ x: 0, y: 0, w: 1, h: 1 });
+  });
+</script>
+</body>
+</html>

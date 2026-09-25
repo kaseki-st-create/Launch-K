@@ -1,0 +1,55 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("api", {
+  loadTiles: () => ipcRenderer.invoke("tiles:load"),
+  saveTiles: (tiles) => ipcRenderer.invoke("tiles:save", tiles),
+  pickFile: (filters) => ipcRenderer.invoke("dialog:pickFile", filters),
+  openPath: (targetPath) => ipcRenderer.invoke("shell:openPath", targetPath),
+  memoAction: (mode) => ipcRenderer.invoke("app:memoAction", mode),
+  isNotepadShortcut: (lnkPath) => ipcRenderer.invoke("app:isNotepadShortcut", lnkPath),
+  openExternal: (url, opts) => ipcRenderer.invoke("shell:openExternal", url, opts),
+  setVolumeAction: (action, count) => ipcRenderer.invoke("system:volume", action, count),
+  setPowerAction: (action) => ipcRenderer.invoke("system:power", action),
+  setSnapAction: (direction, opts) => ipcRenderer.invoke("system:snap", direction, opts),
+  setZoomAction: (direction, count) => ipcRenderer.invoke("system:zoom", direction, count),
+  setBrightness: (delta) => ipcRenderer.invoke("system:brightness", delta),
+  loadSettings: () => ipcRenderer.invoke("settings:load"),
+  saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
+  copyToClipboard: (text) => ipcRenderer.invoke("clipboard:write", text),
+  registerHotkeys: (list) => ipcRenderer.invoke("hotkeys:register", list),
+  onHotkeyTriggered: (callback) => ipcRenderer.on("hotkey:triggered", (event, id) => callback(id)),
+  exportBackup: (data, defaultName) => ipcRenderer.invoke("backup:export", data, defaultName),
+  importBackup: () => ipcRenderer.invoke("backup:import"),
+  resizeWindow: (size) => ipcRenderer.invoke("window:resize", size),
+  resetAll: () => ipcRenderer.invoke("app:reset"),
+  setMediaAction: (action) => ipcRenderer.invoke("system:media", action),
+  setMicAction: () => ipcRenderer.invoke("system:mic"),
+  // スピーカー／マイクのいまの実際のミュート状態。{ speaker, mic }（true=ミュート中、false=ミュートなし、null=不明）
+  getMuteStates: () => ipcRenderer.invoke("audio:getMuteStates"),
+  suspendAlwaysOnTop: () => ipcRenderer.invoke("window:suspendAlwaysOnTop"),
+  pickFolder: () => ipcRenderer.invoke("dialog:pickFolder"),
+  getFileIcon: (targetPath) => ipcRenderer.invoke("shell:getFileIcon", targetPath),
+  copyImageToClipboard: (filePath) => ipcRenderer.invoke("clipboard:writeImage", filePath),
+  copyFileToClipboard: (filePath) => ipcRenderer.invoke("clipboard:writeFile", filePath),
+  pasteToActiveWindow: () => ipcRenderer.invoke("system:pasteToActiveWindow"),
+  openTimer: (seconds) => ipcRenderer.invoke("timer:open", seconds),
+  openGuide: () => ipcRenderer.invoke("guide:open"),
+  // ---- ページを別画面として開く／複数ウィンドウ間の同期 ----
+  openPage: (pageIndex) => ipcRenderer.invoke("pages:open", pageIndex),
+  closeCurrentWindow: () => ipcRenderer.invoke("pages:closeCurrent"),
+  removePage: (pageIndex) => ipcRenderer.invoke("pages:remove", pageIndex),
+  setBusy: (isBusy) => ipcRenderer.send("pages:busySet", isBusy),
+  onBusyChange: (callback) => ipcRenderer.on("pages:busy", (event, isBusy) => callback(isBusy)),
+  onSettingsChanged: (callback) => ipcRenderer.on("settings:changed", () => callback()),
+  onTilesChanged: (callback) => ipcRenderer.on("tiles:changed", () => callback()),
+  // kind: "icon"（正方形に切り抜いたdata URLを返す）／ "background"（保存したファイルのパスを返す）。キャンセル時はnull、失敗時は{error}
+  captureScreen: (kind) => ipcRenderer.invoke("capture:screen", kind),
+  sendHotkey: (combo) => ipcRenderer.invoke("system:sendHotkey", combo),
+  showTooltip: (payload) => ipcRenderer.send("tooltip:show", payload),
+  hideTooltip: () => ipcRenderer.send("tooltip:hide"),
+  // マルチ操作の実行中だけPowerShellプロセスを使い回すための開始/終了通知。
+  // 失敗しても致命的にならないよう、呼び出し側はベストエフォートで扱う。
+  // opts.preloadSnap: このマルチ操作に画面分割が含まれるとき、画面分割用C#を先に読み込ませる
+  startMultiSession: (opts) => ipcRenderer.invoke("multi:sessionStart", opts),
+  endMultiSession: () => ipcRenderer.invoke("multi:sessionEnd"),
+});

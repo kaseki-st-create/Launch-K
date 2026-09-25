@@ -1,0 +1,40 @@
+{
+  "name": "launch-k",
+  "productName": "Launch-K",
+  "version": "1.0.0",
+  "description": "個人用ランチャーデスクトップアプリ",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "set CSC_IDENTITY_AUTO_DISCOVERY=false&&electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "koffi": "2.9.0"
+  },
+  "build": {
+    "appId": "com.kaseki.launchk",
+    "productName": "Launch-K",
+    "files": [
+      "**/*",
+      "!dist/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  },
+  "allowScripts": {
+    "electron@31.7.7": true,
+    "koffi@2.9.0": true,
+    "electron-winstaller@5.4.0": true
+  }
+}

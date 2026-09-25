@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
+<title>使い方</title>
+<style>
+  :root {
+    --bg: #17181c;
+    --panel: #1f2126;
+    --panel-alt: #26282e;
+    --border: #33353c;
+    --text: #f2f2f4;
+    --text-muted: #9b9ea6;
+    --accent: #6c8bff;
+    --accent-contrast: #10121a;
+    --danger: #ff6b5e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+    overflow: hidden;
+  }
+  .frame { display: flex; flex-direction: column; height: 100%; border: 1px solid var(--border); overflow: hidden; }
+  .title-bar {
+    -webkit-app-region: drag;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 8px 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .title-bar .label { font-size: 12px; color: var(--text-muted); letter-spacing: 1px; }
+  .title-bar .btns { display: flex; gap: 6px; -webkit-app-region: no-drag; }
+  .icon-btn {
+    width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--border);
+    background: var(--panel-alt); color: var(--text-muted); font-size: 13px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .icon-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+  .icon-btn:hover { color: var(--text); }
+  .icon-btn.close-btn:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+  .body {
+    flex: 1; overflow-y: auto; padding: 16px 18px 20px;
+  }
+  .body::-webkit-scrollbar { width: 8px; }
+  .body::-webkit-scrollbar-thumb { background: var(--panel-alt); border-radius: 4px; }
+  .guide-line {
+    font-size: 13px; line-height: 1.7; color: var(--text); margin-bottom: 14px;
+  }
+  .guide-line:last-child { margin-bottom: 0; }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="title-bar">
+      <span class="label">📖 使い方</span>
+      <div class="btns">
+        <div class="icon-btn" id="lockBtn" title="常に最前面に表示">🔓</div>
+        <div class="icon-btn close-btn" id="closeBtn" title="閉じる">✕</div>
+      </div>
+    </div>
+    <div class="body" id="bodyEl"></div>
+  </div>
+
+<script>
+  // ハンバーガーメニューにあった「使い方」の内容をそのまま表示する。
+  // 内容を増やす場合は、ここに1行ずつ追加すればよい。
+  const GUIDE_LINES = [
+    "🖥 対応OS：このアプリは現在Windowsのみに対応しています。",
+    "📄 画面：アイコンが増えすぎたときに、独立した画面を分けて整理できます。切替・追加・削除はハンバーガーメニュー最上部の「画面切替」から行えます。バックアップは、全体（すべてのLaunch-K画面）と「いま開いている画面だけ」を別々に書き出し・読み込みできます。削除は好きな画面を選べて（確認あり）、後ろの画面は番号が繰り上がります（例：画面1〜3の2を削除すると、旧3が2になります）。行数・列数、ボタンの名前／ショートカットキーの表示、影、アイコンボタン裏の枠の透明度、アイコンの大きさ、テーマ、アクセントカラーは、画面ごとに独立して設定できます（設定画面の「挙動」「見た目」は見出しをタップすると折りたたみ・展開できます）。画面を追加するときは、「初期設定」または「既存の画面と同じ設定」から選べます（同じ設定にするのは登録したボタン以外のすべてで、ボタン自体はコピーされません）。同じショートカットキーは、別の画面のボタンにも重複して設定できません。",
+    "💾 バックアップの範囲：「全体（すべてのLaunch-K画面）」はすべての画面のボタンと画面ごとの設定をまとめて書き出し・読み込みします。「画面だけ」はいま開いている1画面分のボタンと画面ごとの設定（レイアウト・表示・テーマなど）のみが対象です。次の3つは画面ごとではなく全画面共通の設定のため、どちらのバックアップにも含まれません：①タイトル（Launch-K）の表示、②Windows起動時に自動起動、③OBS連携の接続先（ホスト・ポート・パスワード）。別の環境に移すときは、この3つだけ手動で設定し直してください。",
+    "🔀 Launch-K画面切り替え：ボタンの種類「Launch-K画面切り替え」は、Launch-Kの中の別の画面（ページ）を開くためのボタンです。押すと選んだ画面が別ウィンドウとして開きます（すでに開いていれば前面に表示するだけです）。ウィンドウを画面の半分・四隅に配置する「画面分割」とは別の機能なので混同しないようご注意ください。",
+    "🔘 ボタンの種類の選び方：種類の候補が増えてきたため、ボタン追加・編集画面の「種類」欄はタップすると一覧のダイアログが開き、そこから選ぶ形式になっています（マルチ操作の各動作の「種類」も同様です）。今選択中の種類にはチェックが付きます。",
+    "📐 行数・列数：両方「自動」のときは画面幅に合わせて数が変わります。どちらかを固定すると、その数を保ったままアイコンの大きさが自動で伸縮します（アイコンサイズは常に一番低い優先度で自動調整されます）。",
+    "💾 プリセット：行数・列数を固定した状態を名前つきで保存し、あとでワンクリックでその形・ウィンドウサイズに戻せます。",
+    "🎨 アイコン：ボタン編集の「既定」は種類・動作に応じて自動でアイコンが選ばれるモード、「CSS」は用意した一覧から選ぶモード、「絵文字」は1文字入力、「画像」は画像ファイルを選ぶか、「画面を撮る」を押して画面をドラッグで範囲選択するモードです。「画面を撮る」ではアプリが一瞬隠れ、選んだ正方形の範囲がそのままアイコンになります（Enterで画面全体、Escでキャンセル）。設定の「画像背景」でも、ファイル選択と画面キャプチャのどちらも使えます。",
+    "🎵 サウンド：選んだ音声ファイル（mp3・wav・ogg・m4a）をワンタップで再生するボタンです。効果音・通知音・ボイスメモなどを鳴らすのに使えます。",
+    "📋 コピー：クリップボードにコピーする内容として、テキスト・画像に加えて、指定したファイルまたはフォルダそのものを選べます。ファイル／フォルダを選ぶと、押したときにそのファイル・フォルダ自体がコピーされ、Explorerなどに貼り付けると実際のファイルコピーになります（Windowsのみ対応）。「直前まで使っていた入力欄にそのまま貼り付ける」を合わせて使うと、ファイル・フォルダの場合はコピー直後にExplorerへの貼り付け（Ctrl+V相当）まで自動で行えます。",
+    "📝 メモ：アプリで起動先にWindows標準の「メモ」（notepad.exe）を選ぶと、「既存のウィンドウを開く（前面に出すだけ）」「既存のウィンドウに追加（新しいタブ）」「新規のウィンドウ」を選べます。まだメモが開いていない場合は、どれを選んでも新しく起動します。",
+    "💬 Discord：このアプリから直接Discordは操作できないため、Discord側のキーボードショートカット設定と同じキーをボタン側にも登録し、そのキーを送信することでミュート切替などを行います。",
+    "📡 OBS：OBSのWebSocketサーバー機能（ハンバーガーメニューの「OBS連携」で接続先を設定）を使って、音声ソースのミュート切替・録画の開始／停止・配信の開始／停止を行えます。",
+    "🧩 マルチ操作：登録した複数の動作（マルチ操作以外）を、上から順に実行するボタンです。動作の間の待ちは状況に応じて自動で最短になり、各動作の「このあとの待ち」で0〜2秒に変えることもできます。同時には実行されません。動作は2〜15個まで登録でき、並び替えはドラッグ、削除は✕から行えます。「アプリやリンクを開く→画面分割」と続けると、開いた直後の新しいウィンドウを自動で見つけて配置します（最大7秒待ちます）。動作の欄でEnterを押しても保存されないので、続けて入力できます。",
+    "🌐 リンク：URLを開く際のブラウザを、既定のほかChrome・Edgeから選べます。マルチ操作で「リンクを開く→画面分割」と続ける場合は、既存のウィンドウのタブにせず、普通のブラウザウィンドウ（タブ・アドレスバーつき）を新しく開くので、複数のウィンドウをそれぞれ別の位置に分けられます。単発でリンクだけを開くときは、これまで通り開きます。",
+    "🪟 画面分割：使っていたウィンドウを、画面の左右の半分や四隅に配置するボタンです。うまく配置できないウィンドウ（管理者権限のアプリなど）は、Windows標準のキー操作（Win＋矢印）で代わりに試します。",
+    "🔇 ミュートの表示：スピーカー・マイクのミュート切替ボタンは、Windowsの実際のミュート状態を読み取って表示します。もともとミュートだった場合や、キーボード・他のアプリ・Windowsの設定で切り替えた場合も、アイコンが実際の状態と合います（押した直後、画面に戻ったとき、画面が見えている間は5秒ごとに読み直します）。",
+  ];
+  const bodyEl = document.getElementById("bodyEl");
+  bodyEl.innerHTML = GUIDE_LINES.map((line) => `<div class="guide-line">${line}</div>`).join("");
+
+  const lockBtn = document.getElementById("lockBtn");
+  const closeBtn = document.getElementById("closeBtn");
+  // メインウィンドウのロックボタンと同じ仕様：既定はオフ（🔓）、押すたびにオン/オフを切り替える。
+  let locked = false;
+  lockBtn.addEventListener("click", () => {
+    locked = !locked;
+    lockBtn.classList.toggle("active", locked);
+    lockBtn.textContent = locked ? "🔒" : "🔓";
+    window.guideApi.setAlwaysOnTop(locked);
+  });
+  closeBtn.addEventListener("click", () => window.guideApi.close());
+</script>
+</body>
+</html>
