@@ -122,6 +122,8 @@ const TYPE_META = {
   timer: { label: "タイマー" },
   discord: { label: "Discord" },
   obs: { label: "OBS" },
+  shortcutKeys: { label: "ショートカット" },
+  screenshotFull: { label: "全画面スクショ" },
   multi: { label: "マルチ操作" },
 };
 // マルチ操作の中に入れられる動作の種類（無限再帰になる「マルチ操作」自身と、
@@ -218,6 +220,19 @@ const ZOOM_ACTIONS = {
   in: { label: "ズームイン", glyph: "🔍" },
   out: { label: "ズームアウト", glyph: "🔍" },
 };
+// 基本的なショートカットをワンクリックで送る（ボタン式・キーの自由登録はなし）。
+// 実際に送るキーの組み合わせはmain.js側の固定リスト（BASIC_SHORTCUTS）が決めるので、
+// ここでは「識別名」と表示だけを持つ。
+const SHORTCUT_ACTIONS = {
+  copy: { label: "コピー", glyph: "Ctrl+C" },
+  cut: { label: "切り取り", glyph: "Ctrl+X" },
+  paste: { label: "貼り付け", glyph: "Ctrl+V" },
+  undo: { label: "元に戻す", glyph: "Ctrl+Z" },
+  redo: { label: "やり直し", glyph: "Ctrl+Y" },
+  selectAll: { label: "すべて選択", glyph: "Ctrl+A" },
+  save: { label: "保存", glyph: "Ctrl+S" },
+  find: { label: "検索", glyph: "Ctrl+F" },
+};
 
 // ---------- CSSアイコン（自分で描いたSVGアイコン集） ----------
 // 「なし」を廃止した代わりに用意する、絵文字にも画像挿入にも頼らない内蔵アイコン。
@@ -255,6 +270,9 @@ const CSS_ICONS = {
   pause:       { label: "一時停止",     svg: svgWrap(`<rect x="6" y="4" width="4" height="16" fill="currentColor" stroke="none"/><rect x="14" y="4" width="4" height="16" fill="currentColor" stroke="none"/>`) },
   "skip-next": { label: "次へ",         svg: svgWrap(`<path d="M5 5v14l10-7z" fill="currentColor" stroke="none"/><rect x="17" y="5" width="2.5" height="14" fill="currentColor" stroke="none"/>`) },
   "skip-prev": { label: "前へ",         svg: svgWrap(`<path d="M19 5v14L9 12z" fill="currentColor" stroke="none"/><rect x="4.5" y="5" width="2.5" height="14" fill="currentColor" stroke="none"/>`) },
+  "rotate-left":  { label: "回転（左）", svg: svgWrap(`<path d="M9 3.5A8.5 8.5 0 1 1 3.5 9"/><path d="M3 3v5.5h5.5"/>`) },
+  "rotate-right": { label: "回転（右）", svg: svgWrap(`<path d="M15 3.5A8.5 8.5 0 1 0 20.5 9"/><path d="M21 3v5.5h-5.5"/>`) },
+  camera:      { label: "カメラ",       svg: svgWrap(`<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7l1.4-2.2h5.2L16 7"/><circle cx="12" cy="13.5" r="3.4"/>`) },
   cross:       { label: "×",           svg: svgWrap(`<path d="M6 6l12 12M18 6L6 18"/>`) },
   circleMark:  { label: "○",           svg: svgWrap(`<circle cx="12" cy="12" r="8"/>`) },
   check:       { label: "チェック",     svg: svgWrap(`<path d="M5 13l4 4 10-10"/>`) },
@@ -396,6 +414,10 @@ function defaultCssIconFor(t) {
       return "chatRound";
     case "obs":
       return t.action === "mute" ? "mic" : "tv";
+    case "shortcutKeys":
+      return { copy: "layers", cut: "eraser", paste: "clipboard", undo: "rotate-left", redo: "rotate-right", selectAll: "check", save: "file", find: "zoom-in" }[t.action] || "clipboard";
+    case "screenshotFull":
+      return "camera";
     case "multi":
       return "layers";
     default:
@@ -1559,6 +1581,18 @@ async function handleTileClick(tile, fromMulti) {
     await runObsAction(tile);
     return;
   }
+  if (tile.type === "shortcutKeys") {
+    if (!SHORTCUT_ACTIONS[tile.action]) return showToast("ショートカットが設定されていません");
+    const err = await window.api.basicShortcut(tile.action);
+    if (err) showToast(err);
+    return;
+  }
+  if (tile.type === "screenshotFull") {
+    const result = await window.api.captureFullScreenshot();
+    if (result && result.error) showToast(result.error);
+    else if (result && result.path) showToast("スクリーンショットを保存しました（ピクチャ → Launch-K Screenshots）");
+    return;
+  }
   if (tile.type === "multi") {
     await runMultiAction(tile);
     return;
@@ -1868,6 +1902,7 @@ function renderMultiSubList(t) {
         if (key === "zoom" && !ZOOM_ACTIONS[sub.action]) sub.action = "in";
         if (key === "clipboard" && !CLIPBOARD_ACTIONS[sub.action]) sub.action = "text";
         if (key === "obs" && !OBS_ACTIONS[sub.action]) sub.action = "mute";
+        if (key === "shortcutKeys" && !SHORTCUT_ACTIONS[sub.action]) sub.action = "copy";
         renderMultiSubList(t);
       });
     });
@@ -2144,12 +2179,20 @@ function renderSubFields(fieldsEl, sub, t) {
       fieldsEl.insertAdjacentHTML("beforeend", `<input type="text" class="sub-obs-source" maxlength="60" placeholder="ミュートする音声ソース名" value="${escapeHtml(sub.obsSource || "")}" style="margin:6px 0 0;" />`);
       fieldsEl.querySelector(".sub-obs-source").addEventListener("change", (e) => { sub.obsSource = e.target.value; });
     }
+  } else if (sub.type === "shortcutKeys") {
+    actionButtons(SHORTCUT_ACTIONS);
+    fieldsEl.insertAdjacentHTML("beforeend", `<div class="path-preview" style="margin:6px 0 0;">基本的なショートカットをワンボタンで操作できます。</div>`);
+  } else if (sub.type === "screenshotFull") {
+    fieldsEl.innerHTML = `<div class="path-preview" style="margin:0;">画面全体を撮影して、ピクチャフォルダの「Launch-K Screenshots」に保存します。</div>`;
   }
 }
 
 function renderModal() {
   const t = modalData.tile;
   normalizeIcon(t);
+  // 「ショートカット」ボタンはボタンを押して使うだけなので、起動用のショートカットキーは持たない
+  const showHotkeyField = t.type !== "shortcutKeys";
+  if (!showHotkeyField) t.hotkey = "";
   modalBodyEl.innerHTML = `
     <h2 style="font-size:17px;font-weight:700;margin-bottom:16px;">${modalData.mode === "edit" ? "ボタンを編集" : "ボタンを追加"}</h2>
     <div class="field-label">種類</div>
@@ -2170,6 +2213,7 @@ function renderModal() {
     <div class="field-label" style="margin-top:14px;">表示する画面</div>
     <div class="type-row" id="pageRow"></div>
     ` : ""}
+    ${showHotkeyField ? `
     <div class="field-label" style="margin-top:14px;">ショートカットキー（任意）</div>
     <div class="path-preview" style="margin-top:0;">「Ctrl+Alt+Shift＋数字1文字 または 英字1文字」のみ設定できます。</div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
@@ -2177,6 +2221,7 @@ function renderModal() {
       <button class="btn default" id="recordHotkeyBtn">設定</button>
       ${t.hotkey ? '<button class="btn default" id="clearHotkeyBtn">解除</button>' : ""}
     </div>
+    ` : `<div style="height:14px;"></div>`}
     <div class="modal-actions">
       <button class="btn default" id="cancelBtn">キャンセル</button>
       <button class="btn primary" id="saveBtn">保存</button>
@@ -2200,6 +2245,7 @@ function renderModal() {
       if (key === "zoom" && !ZOOM_ACTIONS[t.action]) t.action = "in";
       if (key === "clipboard" && !CLIPBOARD_ACTIONS[t.action]) t.action = "text";
       if (key === "obs" && !OBS_ACTIONS[t.action]) t.action = "mute";
+      if (key === "shortcutKeys" && !SHORTCUT_ACTIONS[t.action]) t.action = "copy";
       if (key === "multi" && (!Array.isArray(t.subActions) || t.subActions.length < 2)) {
         t.subActions = [{ type: "link", url: "" }, { type: "link", url: "" }];
       }
@@ -2527,6 +2573,21 @@ function renderModal() {
       obsSourceWrap.innerHTML = `<div class="field-label">ミュートする音声ソース名</div><input type="text" id="obsSourceInput" maxlength="60" placeholder="例：マイク/Aux" value="${escapeHtml(t.obsSource || "")}" />`;
       document.getElementById("obsSourceInput").addEventListener("input", (e) => { t.obsSource = e.target.value; });
     }
+  } else if (t.type === "shortcutKeys") {
+    typeSpecific.innerHTML = `
+      <div class="field-label" style="margin-top:0;">ショートカット</div><div class="type-row" id="shortcutActionRow"></div>
+      <div class="path-preview">基本的なショートカットをワンボタンで操作できます。</div>
+    `;
+    const shortcutRow = document.getElementById("shortcutActionRow");
+    Object.entries(SHORTCUT_ACTIONS).forEach(([key, meta]) => {
+      const b = document.createElement("div");
+      b.className = "opt-btn" + (t.action === key ? " active" : "");
+      b.textContent = meta.glyph + " " + meta.label;
+      b.addEventListener("click", () => { t.action = key; normalizeIcon(t); renderModal(); });
+      shortcutRow.appendChild(b);
+    });
+  } else if (t.type === "screenshotFull") {
+    typeSpecific.innerHTML = `<div class="path-preview" style="margin-top:0;">押すと画面全体を撮影して、ピクチャフォルダの「Launch-K Screenshots」に保存します（Windowsのみ）。</div>`;
   } else if (t.type === "multi") {
     if (!Array.isArray(t.subActions)) t.subActions = [];
     typeSpecific.innerHTML = `
@@ -2711,7 +2772,8 @@ function renderModal() {
   const volInput = document.getElementById("volInput");
   if (volInput) volInput.addEventListener("input", (e) => { t.volume = Number(e.target.value); document.getElementById("volLabel").textContent = t.volume; });
 
-  document.getElementById("recordHotkeyBtn").addEventListener("click", (e) => {
+  const recordHotkeyBtn = document.getElementById("recordHotkeyBtn");
+  if (recordHotkeyBtn) recordHotkeyBtn.addEventListener("click", (e) => {
     stopRecordingHotkey();
     e.target.textContent = "キーを押してください…（Escで取消）";
     recordingHotkey = true;

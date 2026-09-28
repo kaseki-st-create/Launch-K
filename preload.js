@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld("api", {
   // kind: "icon"（正方形に切り抜いたdata URLを返す）／ "background"（保存したファイルのパスを返す）。キャンセル時はnull、失敗時は{error}
   captureScreen: (kind) => ipcRenderer.invoke("capture:screen", kind),
   sendHotkey: (combo) => ipcRenderer.invoke("system:sendHotkey", combo),
+  basicShortcut: (id) => ipcRenderer.invoke("system:basicShortcut", id),
+  captureFullScreenshot: () => ipcRenderer.invoke("capture:fullScreenshot"),
   showTooltip: (payload) => ipcRenderer.send("tooltip:show", payload),
   hideTooltip: () => ipcRenderer.send("tooltip:hide"),
   // マルチ操作の実行中だけPowerShellプロセスを使い回すための開始/終了通知。

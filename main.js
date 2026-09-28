@@ -593,7 +593,28 @@ function createTray() {
   });
 }
 
+// ---- 多重起動の防止 ----
+// デスクトップのアイコンを何度押しても、新しいウィンドウを増やさず、
+// すでに開いているLaunch-Kを前面に出す（最小化・タスクトレイ格納中でも復帰させる）。
+// タスクバー・通知のアイコン／グループ化がインストーラーのappIdと一致するようにする
+if (process.platform === "win32") app.setAppUserModelId("com.kaseki.launchk");
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    } else if (app.isReady()) {
+      createWindow();
+    }
+  });
+}
+
 app.whenReady().then(() => {
+  if (!gotSingleInstanceLock) return; // 2つ目のプロセスは何も作らず終了する
   // 既定のアプリケーションメニュー（View > Zoom In/Out に Ctrl+Plus/Ctrl+Minus が
   // 割り当てられている）を残したままだと、ズームボタンがLaunch-K自身にフォーカスが
   // 戻った直後に押された場合、そのショートカットがLaunch-K自身のウィンドウ表示倍率を
@@ -1179,6 +1200,28 @@ ipcMain.handle("system:sendHotkey", async (event, combo) => {
   if (process.platform !== "win32") return "この機能は現在Windowsのみ対応しています";
   // 直前まで使っていたウィンドウ（Discordなど）にキーを届けるため、
   // スナップ・ズームと同様に一旦そちらへフォーカスを戻してから送信する。
+  await restoreExternalFocus();
+  return await pressHotkeyCombo(combo);
+});
+
+// ---- 基本ショートカット（ワンボタン）----
+// 自由なキー登録は受け付けず、ここに書いた固定の組み合わせだけを送る（安全設計）。
+// Ctrl+Alt+Shift+英数字の「起動用ショートカット」とは別物で、衝突しない。
+const BASIC_SHORTCUTS = {
+  copy: "Control+C",
+  cut: "Control+X",
+  paste: "Control+V",
+  undo: "Control+Z",
+  redo: "Control+Y",
+  selectAll: "Control+A",
+  save: "Control+S",
+  find: "Control+F",
+};
+ipcMain.handle("system:basicShortcut", async (event, id) => {
+  if (process.platform !== "win32") return "この機能は現在Windowsのみ対応しています";
+  const combo = Object.prototype.hasOwnProperty.call(BASIC_SHORTCUTS, id) ? BASIC_SHORTCUTS[id] : null;
+  if (!combo) return "未対応のショートカットです";
+  // 直前まで使っていたウィンドウへフォーカスを戻してから送る
   await restoreExternalFocus();
   return await pressHotkeyCombo(combo);
 });
@@ -2082,6 +2125,44 @@ ipcMain.handle("capture:screen", async (event, kind) => {
     // 隠していたウィンドウを戻す。呼び出し元のウィンドウは前面に出して、編集中の画面にそのまま戻れるようにする
     hidden.forEach((w) => { if (!w.isDestroyed() && w !== refWin) w.showInactive(); });
     if (refWasHidden && refWin && !refWin.isDestroyed()) { refWin.show(); refWin.focus(); }
+    captureBusy = false;
+  }
+});
+
+// ---- 全画面スクリーンショット（そのまま画像ファイルとして保存）----
+// 範囲選択はせず、いまの画面全体を撮って「ピクチャ\Launch-K Screenshots」にPNGで保存する。
+// 撮影中はLaunch-Kの窓をいったん隠して映り込まないようにし、終わったら元に戻す。
+ipcMain.handle("capture:fullScreenshot", async (event) => {
+  if (captureBusy) return { error: "スクリーンショットの処理中です" };
+  captureBusy = true;
+  const callerWin = BrowserWindow.fromWebContents(event.sender);
+  const refWin = (callerWin && !callerWin.isDestroyed()) ? callerWin : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  const display = refWin ? screen.getDisplayMatching(refWin.getBounds()) : screen.getPrimaryDisplay();
+  const hidden = [mainWindow, timerWindow, guideWindow, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
+  try {
+    hideTooltip(true);
+    hidden.forEach((w) => w.hide());
+    await new Promise((r) => setTimeout(r, 300)); // 画面から実際に消えるのを待つ
+    const sf = display.scaleFactor || 1;
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width: Math.round(display.bounds.width * sf), height: Math.round(display.bounds.height * sf) },
+    });
+    const idx = screen.getAllDisplays().findIndex((d) => d.id === display.id);
+    const source = sources.find((s) => s.display_id === String(display.id)) || sources[idx] || sources[0];
+    if (!source || source.thumbnail.isEmpty()) return { error: "画面を取得できませんでした" };
+    const dir = path.join(app.getPath("pictures"), "Launch-K Screenshots");
+    fs.mkdirSync(dir, { recursive: true });
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    const filePath = path.join(dir, `screenshot-${stamp}.png`);
+    fs.writeFileSync(filePath, source.thumbnail.toPNG());
+    return { path: filePath };
+  } catch (e) {
+    return { error: "スクリーンショットに失敗しました：" + (e && e.message ? e.message : e) };
+  } finally {
+    hidden.forEach((w) => { if (!w.isDestroyed()) w.showInactive(); });
     captureBusy = false;
   }
 });
