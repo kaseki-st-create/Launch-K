@@ -4,6 +4,7 @@ const fs = require("fs");
 const { exec, execFile, spawn } = require("child_process");
 const native = require("./native"); // koffiによるuser32.dll直接呼び出し（利用不可ならnative.availableがfalseになる）
 const nativeSnap = require("./native-snap"); // 画面分割（スナップ）専用のkoffi実装。失敗時はPowerShell方式にフォールバック
+const updater = require("./updater"); // 自動アップデート（GitHub Releases）。開発中や読み込み失敗時は何もしない
 
 const ICON_SCRIPT_PATH = path.join(__dirname, "scripts", "get-icon.ps1");
 
@@ -623,6 +624,11 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   createWindow();
   createTray();
+  updater.init({
+    getParentWindow: () => mainWindow,
+    // 閉じてもトレイに残る作りなので、更新のための終了ではウィンドウを隠さず本当に閉じさせる
+    prepareQuit: () => { app.isQuitting = true; },
+  });
   app.on("activate", () => {
     if (!mainWindow) createWindow();
     else mainWindow.show();
@@ -674,6 +680,10 @@ app.on("will-quit", () => {
   // あれば、アプリ終了時にプロセスが残ってしまわないよう明示的に閉じる。
   killMultiPsSession("app-quit");
 });
+
+// ---- アプリのバージョン表示・更新確認（設定画面から） ----
+ipcMain.handle("app:getVersion", () => app.getVersion());
+ipcMain.handle("app:checkForUpdates", () => updater.checkNow(true));
 
 // ---- タイル設定の読み書き ----
 ipcMain.handle("tiles:load", () => loadTiles());

@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld("api", {
   pasteToActiveWindow: () => ipcRenderer.invoke("system:pasteToActiveWindow"),
   openTimer: (seconds) => ipcRenderer.invoke("timer:open", seconds),
   openGuide: () => ipcRenderer.invoke("guide:open"),
+  getAppVersion: () => ipcRenderer.invoke("app:getVersion"),
+  checkForUpdates: () => ipcRenderer.invoke("app:checkForUpdates"),
   // ---- ページを別画面として開く／複数ウィンドウ間の同期 ----
   openPage: (pageIndex) => ipcRenderer.invoke("pages:open", pageIndex),
   closeCurrentWindow: () => ipcRenderer.invoke("pages:closeCurrent"),

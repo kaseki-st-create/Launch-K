@@ -3545,10 +3545,35 @@ function renderSettingsPanel() {
 
 
   const linksSection = document.getElementById("linksSection");
-  linksSection.innerHTML = `<div class="link-row" id="guideLink">📖 使い方</div><div class="link-row" id="homepageLink">🏠 かせき-Homepage</div><div class="link-row" id="tosLink">📄 利用規約</div>`;
+  linksSection.innerHTML = `<div class="link-row" id="guideLink">📖 使い方</div><div class="link-row" id="homepageLink">🏠 かせき-Homepage</div><div class="link-row" id="updateLink">🔄 更新を確認</div><div class="link-row" id="tosLink">📄 利用規約</div>`;
   document.getElementById("guideLink").addEventListener("click", () => window.api.openGuide());
   document.getElementById("homepageLink").addEventListener("click", () => window.api.openExternal("https://kaseki-homepage.vercel.app/"));
   document.getElementById("tosLink").addEventListener("click", renderTosPanel);
+
+  const updateLink = document.getElementById("updateLink");
+  const updateLinkLabel = "🔄 更新を確認";
+  window.api.getAppVersion().then((v) => { updateLink.textContent = `${updateLinkLabel}（現在 v${v}）`; }).catch(() => {});
+  updateLink.addEventListener("click", async () => {
+    if (updateLink.dataset.busy) return;
+    updateLink.dataset.busy = "1";
+    const shownLabel = updateLink.textContent;
+    updateLink.textContent = "🔄 確認中…";
+    let res;
+    try { res = await window.api.checkForUpdates(); } catch (e) { res = { status: "error" }; }
+    updateLink.textContent = shownLabel;
+    delete updateLink.dataset.busy;
+    const messages = {
+      latest: `最新のバージョンです（v${res && res.version}）`,
+      available: `新しいバージョン v${res && res.version} をダウンロードしています。完了したらお知らせします`,
+      downloading: "新しいバージョンをダウンロード中です",
+      downloaded: "更新の準備ができています",
+      checking: "確認中です",
+      dev: "更新の確認はインストール版でのみ使えます",
+      unavailable: "更新の確認はいまは使えません",
+      error: "更新を確認できませんでした。ネットワーク接続をご確認ください",
+    };
+    showToast(messages[res && res.status] || messages.error);
+  });
 
   document.getElementById("resetAllBtn").addEventListener("click", openConfirmReset);
 }
@@ -3676,6 +3701,7 @@ function renderTosPanel() {
       また、画面キャプチャで取得した画像には、個人情報や機密情報が写り込むことがあります。取得・保存・共有は、ご自身の責任で行ってください。
       <h4>6. 免責事項</h4>
       本アプリは現状有姿で提供され、内容の正確性・完全性・特定目的への適合性についていかなる保証も行いません。本アプリの利用により生じたいかなる損害についても、運営者は責任を負いません。
+      <div class="tos-copy">© kaseki</div>
     </div>
   `;
   document.getElementById("backToSettings").addEventListener("click", renderSettingsPanel);
