@@ -15,6 +15,8 @@ let keybd_event = null;
 let GetForegroundWindowNative = null;
 let SetForegroundWindowNative = null;
 let IsWindowNative = null;
+let ShowWindowNative = null;
+let SetWindowPosNative = null;
 
 if (process.platform === "win32") {
   try {
@@ -27,6 +29,8 @@ if (process.platform === "win32") {
     GetForegroundWindowNative = user32.func("GetForegroundWindow", "uintptr_t", []);
     SetForegroundWindowNative = user32.func("SetForegroundWindow", "bool", ["uintptr_t"]);
     IsWindowNative = user32.func("IsWindow", "bool", ["uintptr_t"]);
+    ShowWindowNative = user32.func("ShowWindow", "bool", ["uintptr_t", "int"]);
+    SetWindowPosNative = user32.func("SetWindowPos", "bool", ["uintptr_t", "intptr_t", "int", "int", "int", "int", "uint32"]);
   } catch (e) {
     // koffi自体が読み込めない／関数が取得できない環境では使用不可扱いにする
     user32 = null;
@@ -124,8 +128,31 @@ function isWindowHandle(hwnd) {
   }
 }
 
+// 他アプリのウィンドウの表示状態を変える（SW_MAXIMIZE=3 など）。失敗しても例外は外へ出さない。
+function showWindowHandle(hwnd, cmd) {
+  try {
+    return !!ShowWindowNative(hwnd, cmd);
+  } catch (e) {
+    return false;
+  }
+}
+
+// ウィンドウを「最前面（TOPMOST）の層の一番上」へ出し直す。位置・大きさは変えず、フォーカスも奪わない。
+// すでに最前面のウィンドウでも、他アプリの最前面ウィンドウに抜かれていた順位を取り戻せる。
+const HWND_TOPMOST = -1;
+const SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010;
+function setTopmostNoActivate(hwnd) {
+  try {
+    return !!SetWindowPosNative(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  } catch (e) {
+    return false;
+  }
+}
+
 module.exports = {
   available,
+  showWindowHandle,
+  setTopmostNoActivate,
   pressKey,
   keyDown,
   keyUp,

@@ -1,7 +1,7 @@
 {
   "name": "launch-k",
   "productName": "Launch-K",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "個人用ランチャーデスクトップアプリ",
   "main": "main.js",
   "scripts": {
@@ -42,7 +42,7 @@
     }
   },
   "allowScripts": {
-    "electron@31.7.7": true,
+    "electron@44.5.0": true,
     "koffi@2.9.0": true,
     "electron-winstaller@5.4.0": true
   },

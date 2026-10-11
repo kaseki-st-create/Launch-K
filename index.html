@@ -161,7 +161,7 @@
 
   .grid {
     display: grid;
-    gap: 9px 11px; /* 上下（行間）9px・左右（列間）11px。renderer.jsのGRID_ROW_GAP/GRID_GAPと必ず一致させること */
+    gap: 7.5px 11px; /* 上下（行間）7.5px・左右（列間）11px。renderer.jsのGRID_ROW_GAP/GRID_GAPと必ず一致させること */
     /* レイアウト計算で画面に収まる列数・行数・サイズを出しているため、
        基本的にスクロールは発生しない想定。丸め誤差などで僅かに
        あふれた場合の保険としてoverflow autoは残すが、
@@ -174,7 +174,9 @@
   }
   .grid::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
-  .tile-wrap { position: relative; }
+  /* 名前表示・編集/削除ボタンの反応範囲を、クリックできるアイコン枠（.tile）と同じ角丸の形にそろえる */
+  /* 行が縦に引き伸ばされても、反応範囲（名前表示・編集/削除ボタン）が見えている枠より下へ伸びないよう、上詰めにする */
+  .tile-wrap { position: relative; align-self: start; border-radius: var(--tile-radius); }
   .tile-wrap.busy .tile { opacity: 0.55; pointer-events: none; cursor: default; }
 
   /* マルチ操作の実行中は、実行中のボタン以外の全ボタン（他ページの別画面も含む）と
@@ -280,6 +282,8 @@
     width: calc(clamp(16px, calc(var(--tile-size, 96px) * 0.28), 24px) - 2px);
     height: calc(clamp(16px, calc(var(--tile-size, 96px) * 0.28), 24px) - 2px);
   }
+  /* ウィンドウがPC画面の1/7以下のときは、削除ボタンを出さない（編集ボタンの位置はそのまま） */
+  .grid.small-window .icon-btn.danger { display: none; }
   .icon-btn.danger { background: rgba(255,107,94,0.85); border-color: rgba(255,107,94,0.9); color: #1A1A1A; }
 
   .add-tile {

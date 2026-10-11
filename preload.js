@@ -4,7 +4,7 @@ contextBridge.exposeInMainWorld("api", {
   loadTiles: () => ipcRenderer.invoke("tiles:load"),
   saveTiles: (tiles) => ipcRenderer.invoke("tiles:save", tiles),
   pickFile: (filters) => ipcRenderer.invoke("dialog:pickFile", filters),
-  openPath: (targetPath) => ipcRenderer.invoke("shell:openPath", targetPath),
+  openPath: (targetPath, opts) => ipcRenderer.invoke("shell:openPath", targetPath, opts),
   memoAction: (mode) => ipcRenderer.invoke("app:memoAction", mode),
   isNotepadShortcut: (lnkPath) => ipcRenderer.invoke("app:isNotepadShortcut", lnkPath),
   openExternal: (url, opts) => ipcRenderer.invoke("shell:openExternal", url, opts),

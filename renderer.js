@@ -337,8 +337,12 @@ function isMuteStateTile(t) {
 }
 // 実際の状態を読み、変わっていたときだけ画面を描き直す。
 // ミュート系のボタンが1つも無いときは、何も呼ばない（PowerShellを無駄に起動しない）。
+const APP_STARTED_AT = Date.now();
+const MUTE_READ_NOT_BEFORE_MS = 3000; // 起動直後の重い処理を避けるため、起動からこの時間は読まない（定期・フォーカス・再表示のどれからも）
 async function refreshMuteStates() {
   if (muteRefreshInFlight || !tiles.some(isMuteStateTile)) return;
+  const sinceStart = Date.now() - APP_STARTED_AT;
+  if (sinceStart < MUTE_READ_NOT_BEFORE_MS) { scheduleMuteRefresh(MUTE_READ_NOT_BEFORE_MS - sinceStart + 50); return; }
   muteRefreshInFlight = true;
   try {
     const r = await window.api.getMuteStates();
@@ -602,6 +606,7 @@ const DEFAULT_SETTINGS = {
   showHotkeyLabel: true,
   showShadows: true,
   alwaysOnTop: false,
+  pageLocks: [], // 画面（ページ）ごとの「常に最前面」。画面番号順のtrue/false
   launchAtLogin: false,
   pageCount: 1,
   obsHost: "127.0.0.1",
@@ -612,7 +617,7 @@ const DEFAULT_SETTINGS = {
 const BASE_TILE = 126; // 自動モードでの基準アイコンサイズ
 const RECOMMENDED_PRESETS = [{ name: "おすすめ3×5", rows: 3, columns: 5 }];
 const GRID_GAP = 11; // ボタン同士の左右の間隔（CSSの.gridのgap列側と必ず一致させること）
-const GRID_ROW_GAP = 9; // ボタン同士の上下の間隔（CSSの.gridのgap行側と必ず一致させること）
+const GRID_ROW_GAP = 7.5; // ボタン同士の上下の間隔（CSSの.gridのgap行側と必ず一致させること）
 const MIN_TILE = 30;   // 行数・列数を固定しているときの絶対的な下限
 const MAX_TILE = 220;  // これより大きくはしない
 const AUTO_MIN_TILE = 56; // 行数・列数が両方「自動」のときに縮小してよい下限（これより小さいと逆に見づらいため、MIN_TILEより少し大きめ）
@@ -685,6 +690,14 @@ function formatHotkeyDisplay(hotkey) {
   if (!hotkey) return "";
   return hotkey.replace(/Control/g, "Ctrl");
 }
+// ツールチップ用のショートカット表示：「Ctrl Alt Sft G」のように、修飾キーを短くして空白で区切る
+function formatHotkeyForTooltip(hotkey) {
+  if (!hotkey) return "";
+  const parts = String(hotkey).split("+").map((p) => p.trim());
+  if (parts.length > 1 && parts[parts.length - 1] === "") { parts.pop(); parts.push("+"); } // 「+」キー自体（例：Ctrl++）
+  const names = { Control: "Ctrl", CommandOrControl: "Ctrl", Ctrl: "Ctrl", Shift: "Sft", Alt: "Alt", Option: "Alt", Meta: "Win", Super: "Win", Command: "Win", Cmd: "Win" };
+  return parts.filter((p) => p !== "").map((p) => names[p] || p).join(" ");
+}
 // ボタンの上に表示するショートカットキーは「英字または数字1文字」だけにする
 // （例：Ctrl+Alt+Shift+K → K）。1文字でないもの（古いデータなど）は従来どおり全体を表示する。
 function formatHotkeyKeyOnly(hotkey) {
@@ -733,6 +746,11 @@ function escapeHtml(str) {
 // （#RGB/#RGBA/#RRGGBB/#RRGGBBAA または既知のCSSキーワード程度）以外は
 // 既定色にフォールバックする。
 const SAFE_COLOR_RE = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+// 数値のつもりの値（バックアップのインポート等で文字列が混ざり得る）をHTML属性に埋め込む前に数値へそろえる
+function numAttr(v, def) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n) : def;
+}
 function safeColor(c) {
   return typeof c === "string" && SAFE_COLOR_RE.test(c.trim()) ? c.trim() : "#FFB238";
 }
@@ -872,8 +890,10 @@ function applyTheme() {
     root.setProperty("--tile-radius", "50%");
     root.setProperty("--icon-radius", "50%");
   } else {
-    root.setProperty("--tile-radius", "20px");
-    root.setProperty("--icon-radius", "12px");
+    // タイルが小さくなっても角丸だけが大きいまま残って丸く見えないよう、タイルの大きさに比例させる
+    // （最大は従来どおり20px／12px）。--tile-size はrenderGridで設定される。
+    root.setProperty("--tile-radius", "clamp(4px, calc(var(--tile-size, 96px) * 0.18), 20px)");
+    root.setProperty("--icon-radius", "clamp(3px, calc(var(--tile-size, 96px) * 0.11), 12px)");
   }
   if (pt.themeMode === "image" && pt.bgImagePath) {
     // 画像そのものはbody::before（専用の背景レイヤー）にCSS変数経由で渡す。
@@ -906,14 +926,25 @@ function applyTheme() {
 }
 
 // ---------- 左上のロックボタン（常に最前面に表示のショートカット）----------
+// 画面ごとに独立したロック状態（pageLocksが空の古い設定では、従来のalwaysOnTopを全画面共通で使う）
+function isPageLockedAt(idx) {
+  const a = settings.pageLocks;
+  if (Array.isArray(a) && a.length > 0) return !!a[idx];
+  return !!settings.alwaysOnTop;
+}
 function updateLockButton() {
-  const active = !!settings.alwaysOnTop;
+  const active = isPageLockedAt(WINDOW_PAGE_INDEX);
   lockBtn.textContent = active ? "🔒" : "🔓";
   lockBtn.classList.toggle("active", active);
-  lockBtn.title = active ? "常に最前面に表示：オン" : "常に最前面に表示：オフ";
+  lockBtn.title = active ? "この画面を常に最前面に表示：オン" : "この画面を常に最前面に表示：オフ";
 }
 lockBtn.addEventListener("click", async () => {
-  settings.alwaysOnTop = !settings.alwaysOnTop;
+  const count = Math.max(1, Number(settings.pageCount) || 1);
+  const locks = [];
+  for (let i = 0; i < count; i++) locks.push(isPageLockedAt(i));
+  locks[WINDOW_PAGE_INDEX] = !locks[WINDOW_PAGE_INDEX];
+  settings.pageLocks = locks;
+  settings.alwaysOnTop = locks.some(Boolean);
   await persistSettings();
   updateLockButton();
 });
@@ -955,7 +986,8 @@ async function init() {
   syncHotkeys();
   // ミュート系のアイコンを、OSの実際の状態に合わせる。起動時に1回、その後は画面に戻ってきたとき
   // （フォーカス・再表示）と、見えている間の定期的な読み直し（5秒ごと）で最新に保つ。
-  refreshMuteStates();
+  // 起動直後はPowerShellの起動・C#のコンパイルが重く、PC起動時の立ち上がりを遅くするため、起動から3秒は読まない（定期・フォーカス・再表示の読み直しも同様）。
+  scheduleMuteRefresh(MUTE_READ_NOT_BEFORE_MS);
   window.addEventListener("focus", () => scheduleMuteRefresh(100));
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") scheduleMuteRefresh(100); });
   setInterval(() => { if (document.visibilityState === "visible") refreshMuteStates(); }, MUTE_POLL_INTERVAL_MS);
@@ -1086,9 +1118,18 @@ function clampActivePage() {
   }
 }
 
+// PC画面（作業領域）の1/7以下の広さのときは、削除ボタンを出さない
+function isSmallWindow() {
+  const areaWin = window.innerWidth * window.innerHeight;
+  const areaScr = (window.screen.availWidth || window.screen.width) * (window.screen.availHeight || window.screen.height);
+  return areaScr > 0 && areaWin <= areaScr / 7;
+}
+let lastTotalPages = 1;
+let gridRelayoutGuard = false;
 function renderGrid() {
   window.api.hideTooltip(); // 再描画で消えるボタンのツールチップが残らないようにする
   clampActivePage();
+  const gridTopUsed = gridEl.getBoundingClientRect().top; // この値でレイアウトを計算する（後でページ切替UIの有無でずれたら計算し直す）
   const pageTiles = currentPageTiles();
   emptyHintEl.style.display = pageTiles.length === 0 ? "block" : "none";
   const { columns, rows, perPage, tileSize } = computeLayout();
@@ -1111,9 +1152,11 @@ function renderGrid() {
   // ボタンが小さいときは、編集・削除ボタンを横並びにするとアイコンの中央付近を覆ってしまうため、
   // 縦に並べて右端に寄せる（CSSの .grid.compact-tiles）。
   gridEl.classList.toggle("compact-tiles", tileSize < 110);
+  gridEl.classList.toggle("small-window", isSmallWindow());
 
   const combined = [...pageTiles, { __addTile: true }];
   const totalPages = Math.max(1, Math.ceil(combined.length / perPage));
+  lastTotalPages = totalPages;
   if (currentPage >= totalPages) currentPage = totalPages - 1;
   if (currentPage < 0) currentPage = 0;
   const start = currentPage * perPage;
@@ -1133,6 +1176,13 @@ function renderGrid() {
   });
 
   renderPager(totalPages);
+
+  // ページ切替（◀ 1 / 2 ▶）の表示・非表示でグリッドの上端がずれると、計算に使った上端との差で
+  // アイコンの大きさがサブページ切替のたびに変わってしまう。ずれていたら、実際の上端で1回だけ計算し直す。
+  if (!gridRelayoutGuard && Math.abs(gridEl.getBoundingClientRect().top - gridTopUsed) > 0.5) {
+    gridRelayoutGuard = true;
+    try { renderGrid(); } finally { gridRelayoutGuard = false; }
+  }
 }
 
 // 並べ替えドラッグの直後、移動したボタンが今見えているサブページの外に
@@ -1302,10 +1352,12 @@ function buildTileElement(tile) {
   // ツールチップ（名前・ショートカット表示）は、アプリ画面の枠で見切れないよう、
   // 画面内のDOMではなく、メインプロセス側の専用ウィンドウに表示する（画面外にもはみ出せる）。
   wrap.addEventListener("mouseenter", () => {
-    const r = wrap.getBoundingClientRect();
+    // アイコン枠（ボタン裏の枠）が見えない設定（透明度0%）のときは、枠ではなくアイコンの下に出す
+    const iconEl = btn.querySelector(".tile-icon");
+    const r = (currentPanelOpacity() <= 0 && iconEl) ? iconEl.getBoundingClientRect() : btn.getBoundingClientRect();
     window.api.showTooltip({
       name: tile.name || "無題",
-      key: tile.hotkey ? formatHotkeyDisplay(tile.hotkey) : "",
+      key: tile.hotkey ? formatHotkeyForTooltip(tile.hotkey) : "",
       rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
     });
   });
@@ -1480,13 +1532,13 @@ async function handleTileClick(tile, fromMulti) {
       if (err) showToast("開けませんでした：" + err);
       return;
     }
-    const err = await window.api.openPath(tile.filePath);
+    const err = await window.api.openPath(tile.filePath, tile.type === "file" ? { maximize: tile.openMaximized === true } : undefined);
     if (err) showToast("開けませんでした：" + err);
     return;
   }
   if (tile.type === "folder") {
     if (!tile.filePath) return showToast("フォルダが設定されていません");
-    const err = await window.api.openPath(tile.filePath);
+    const err = await window.api.openPath(tile.filePath, { maximize: tile.openMaximized === true });
     if (err) showToast("開けませんでした：" + err);
     return;
   }
@@ -2071,8 +2123,8 @@ function renderSubFields(fieldsEl, sub, t) {
   } else if (sub.type === "brightness") {
     actionButtons(BRIGHTNESS_ACTIONS);
     fieldsEl.insertAdjacentHTML("beforeend", `
-      <div class="field-label" style="margin-top:8px;">変える量（<span id="sf-brightLabel">${sub.repeatCount || 3}</span>%）</div>
-      <input type="range" id="sf-brightInput" min="1" max="5" value="${sub.repeatCount || 3}" style="width:100%;accent-color:var(--accent);margin-bottom:0;" />
+      <div class="field-label" style="margin-top:8px;">変える量（<span id="sf-brightLabel">${numAttr(sub.repeatCount || 3, 3)}</span>%）</div>
+      <input type="range" id="sf-brightInput" min="1" max="5" value="${numAttr(sub.repeatCount || 3, 3)}" style="width:100%;accent-color:var(--accent);margin-bottom:0;" />
     `);
     fieldsEl.querySelector("#sf-brightInput").addEventListener("input", (e) => {
       sub.repeatCount = Number(e.target.value);
@@ -2084,8 +2136,8 @@ function renderSubFields(fieldsEl, sub, t) {
     if ((sub.repeatCount || 1) > 5) sub.repeatCount = 5;
     actionButtons(ZOOM_ACTIONS);
     fieldsEl.insertAdjacentHTML("beforeend", `
-      <div class="field-label" style="margin-top:8px;">押す回数（<span id="sf-zoomLabel">${sub.repeatCount || 1}</span>回・1回＝5%）</div>
-      <input type="range" id="sf-zoomInput" min="1" max="5" value="${sub.repeatCount || 1}" style="width:100%;accent-color:var(--accent);margin-bottom:0;" />
+      <div class="field-label" style="margin-top:8px;">押す回数（<span id="sf-zoomLabel">${numAttr(sub.repeatCount || 1, 1)}</span>回・1回＝5%）</div>
+      <input type="range" id="sf-zoomInput" min="1" max="5" value="${numAttr(sub.repeatCount || 1, 1)}" style="width:100%;accent-color:var(--accent);margin-bottom:0;" />
     `);
     fieldsEl.querySelector("#sf-zoomInput").addEventListener("input", (e) => {
       sub.repeatCount = Number(e.target.value);
@@ -2194,7 +2246,7 @@ function renderModal() {
   const showHotkeyField = t.type !== "shortcutKeys";
   if (!showHotkeyField) t.hotkey = "";
   modalBodyEl.innerHTML = `
-    <h2 style="font-size:17px;font-weight:700;margin-bottom:16px;">${modalData.mode === "edit" ? "ボタンを編集" : "ボタンを追加"}</h2>
+    <h2 style="font-size:17px;font-weight:700;margin-bottom:16px;">${modalData.mode === "edit" ? "ボタンを編集" : "追加"}</h2>
     <div class="field-label">種類</div>
     <div class="type-row" id="typeRow"></div>
     <div class="field-label">名前</div>
@@ -2291,8 +2343,8 @@ function renderModal() {
       <div class="path-preview" style="margin-top:0;">クリックすると、選んだ音声ファイル（mp3・wav・ogg・m4a）をそのまま再生します。</div>
       <div class="file-pick-btn" id="pickSoundBtn">🎵 音声ファイルを選択</div>
       <div class="path-preview">${t.filePath ? escapeHtml(t.filePath) : "未選択"}</div>
-      <div class="field-label">個別音量（<span id="volLabel">${t.volume ?? 100}</span>）</div>
-      <input type="range" id="volInput" min="0" max="100" value="${t.volume ?? 100}" style="width:100%;accent-color:var(--accent);margin-bottom:14px;" />
+      <div class="field-label">個別音量（<span id="volLabel">${numAttr(t.volume ?? 100, 100)}</span>）</div>
+      <input type="range" id="volInput" min="0" max="100" value="${numAttr(t.volume ?? 100, 100)}" style="width:100%;accent-color:var(--accent);margin-bottom:14px;" />
     `;
     document.getElementById("pickSoundBtn").addEventListener("click", async () => {
       const picked = await window.api.pickFile([{ name: "音声ファイル", extensions: ["mp3", "wav", "ogg", "m4a"] }]);
@@ -2335,13 +2387,15 @@ function renderModal() {
       });
     }
   } else if (t.type === "file") {
-    typeSpecific.innerHTML = `<div class="file-pick-btn" id="pickFileBtn">📄 開くファイルを選択</div><div class="path-preview">${t.filePath ? escapeHtml(t.filePath) : "未選択"}</div>`;
+    typeSpecific.innerHTML = `<div class="file-pick-btn" id="pickFileBtn">📄 開くファイルを選択</div><div class="path-preview">${t.filePath ? escapeHtml(t.filePath) : "未選択"}</div>${openMaximizedRowHtml(t)}`;
+    bindOpenMaximizedRow(t);
     document.getElementById("pickFileBtn").addEventListener("click", async () => {
       const picked = await window.api.pickFile([]);
       if (picked) { t.filePath = picked; renderModal(); }
     });
   } else if (t.type === "folder") {
-    typeSpecific.innerHTML = `<div class="file-pick-btn" id="pickFolderBtn">📁 開くフォルダを選択</div><div class="path-preview">${t.filePath ? escapeHtml(t.filePath) : "未選択"}</div>`;
+    typeSpecific.innerHTML = `<div class="file-pick-btn" id="pickFolderBtn">📁 開くフォルダを選択</div><div class="path-preview">${t.filePath ? escapeHtml(t.filePath) : "未選択"}</div>${openMaximizedRowHtml(t)}`;
+    bindOpenMaximizedRow(t);
     document.getElementById("pickFolderBtn").addEventListener("click", async () => {
       const picked = await window.api.pickFolder();
       if (picked) { t.filePath = picked; renderModal(); }
@@ -2372,7 +2426,7 @@ function renderModal() {
     });
     const repeatWrap = document.getElementById("repeatCountWrap");
     if (t.action === "up" || t.action === "down") {
-      repeatWrap.innerHTML = `<div class="field-label">1回のクリックで押す回数（<span id="repeatLabel">${t.repeatCount || 1}</span>回）</div><input type="range" id="repeatInput" min="1" max="10" value="${t.repeatCount || 1}" style="width:100%;accent-color:var(--accent);margin-bottom:14px;" />`;
+      repeatWrap.innerHTML = `<div class="field-label">1回のクリックで押す回数（<span id="repeatLabel">${numAttr(t.repeatCount || 1, 1)}</span>回）</div><input type="range" id="repeatInput" min="1" max="10" value="${numAttr(t.repeatCount || 1, 1)}" style="width:100%;accent-color:var(--accent);margin-bottom:14px;" />`;
       document.getElementById("repeatInput").addEventListener("input", (e) => {
         t.repeatCount = Number(e.target.value);
         document.getElementById("repeatLabel").textContent = t.repeatCount;
@@ -2394,8 +2448,8 @@ function renderModal() {
     if ((t.repeatCount || 1) > 5) t.repeatCount = 5;
     typeSpecific.innerHTML = `
       <div class="field-label" style="margin-top:0;">動作</div><div class="type-row" id="zoomActionRow"></div>
-      <div class="field-label">1回のクリックで押す回数（<span id="zoomRepeatLabel">${t.repeatCount || 1}</span>回・1回＝画面の5%）</div>
-      <input type="range" id="zoomRepeatInput" min="1" max="5" value="${t.repeatCount || 1}" style="width:100%;accent-color:var(--accent);margin-bottom:4px;" />
+      <div class="field-label">1回のクリックで押す回数（<span id="zoomRepeatLabel">${numAttr(t.repeatCount || 1, 1)}</span>回・1回＝画面の5%）</div>
+      <input type="range" id="zoomRepeatInput" min="1" max="5" value="${numAttr(t.repeatCount || 1, 1)}" style="width:100%;accent-color:var(--accent);margin-bottom:4px;" />
       <div class="path-preview">Windowsの「Ctrl + ／Ctrl −」相当（多くのアプリの画面拡大・縮小）を送ります。1回押すごとに画面が約5%拡大・縮小します。押し続けると連続実行されます。</div>
     `;
     const zoomRow = document.getElementById("zoomActionRow");
@@ -2504,8 +2558,8 @@ function renderModal() {
   } else if (t.type === "brightness") {
     typeSpecific.innerHTML = `
       <div class="field-label">動作</div><div class="type-row" id="brightnessActionRow"></div>
-      <div class="field-label">1回のクリックで変える量（<span id="brightRepeatLabel">${t.repeatCount || 3}</span>%）</div>
-      <input type="range" id="brightRepeatInput" min="1" max="5" step="1" value="${t.repeatCount || 3}" style="width:100%;accent-color:var(--accent);margin-bottom:4px;" />
+      <div class="field-label">1回のクリックで変える量（<span id="brightRepeatLabel">${numAttr(t.repeatCount || 3, 3)}</span>%）</div>
+      <input type="range" id="brightRepeatInput" min="1" max="5" step="1" value="${numAttr(t.repeatCount || 3, 3)}" style="width:100%;accent-color:var(--accent);margin-bottom:4px;" />
       <div class="path-preview">対応しているノートPCの内蔵ディスプレイのみ対応です。押し続けると連続実行されます。</div>
     `;
     const row = document.getElementById("brightnessActionRow");
@@ -2830,6 +2884,14 @@ function renderModal() {
   };
 }
 
+// ファイル・フォルダのボタンだけに付く「開くとき最大化」のチェック（ボタンごとの設定）
+function openMaximizedRowHtml(t) {
+  return `<label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;"><input type="checkbox" id="tileOpenMaxChk" ${t.openMaximized === true ? "checked" : ""} /> 開くとき最大化する</label>`;
+}
+function bindOpenMaximizedRow(t) {
+  document.getElementById("tileOpenMaxChk").addEventListener("change", (e) => { t.openMaximized = e.target.checked; });
+}
+
 async function saveModal() {
   const t = modalData.tile;
   if (!t.name.trim()) return showToast("名前を入力してください");
@@ -2978,6 +3040,24 @@ document.addEventListener("keydown", (e) => {
   const saveBtn = document.getElementById("saveBtn");
   if (saveBtn) { e.preventDefault(); saveBtn.click(); }
 }, true);
+
+// ---------- 矢印キーでサブページ切り替え ----------
+// ←/→ で前後のサブページへ。入力欄・ホットキー記録中・モーダル/設定が開いている間は何もしない。
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  if (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey || e.isComposing) return;
+  if (recordingHotkey) return;
+  if (overlayEl.classList.contains("show") || settingsOverlayEl.classList.contains("show")) return;
+  if (document.body.classList.contains("global-busy")) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || (t.tagName && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))) return;
+  if (lastTotalPages <= 1) return;
+  const next = e.key === "ArrowLeft" ? Math.max(0, currentPage - 1) : Math.min(lastTotalPages - 1, currentPage + 1);
+  if (next === currentPage) return;
+  e.preventDefault();
+  currentPage = next;
+  renderGrid();
+});
 
 // ---------- インポート確認 ----------
 function openConfirmImport(data) {
@@ -3258,7 +3338,7 @@ function renderSettingsPanel() {
 
   const themeExtra = document.getElementById("themeExtra");
   if (pt.themeMode === "custom") {
-    themeExtra.innerHTML = `<div style="margin-top:6px;"><input type="color" id="customColorInput" value="${pt.customColor}" style="width:60px;height:32px;border:none;background:none;cursor:pointer;" /></div>`;
+    themeExtra.innerHTML = `<div style="margin-top:6px;"><input type="color" id="customColorInput" value="${safeColor(pt.customColor)}" style="width:60px;height:32px;border:none;background:none;cursor:pointer;" /></div>`;
     document.getElementById("customColorInput").addEventListener("mousedown", () => window.api.suspendAlwaysOnTop());
     document.getElementById("customColorInput").addEventListener("input", (e) => {
       // ドラッグ中に毎回保存すると、その都度メインプロセスへ設定が送られてロック

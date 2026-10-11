@@ -19,6 +19,7 @@ const DEFAULT_SETTINGS = {
   iconScale: 100,
   gridColumns: "auto",
   alwaysOnTop: false,
+  pageLocks: [], // 画面（ページ）ごとの「常に最前面」。画面番号順のtrue/false
   launchAtLogin: false,
   showShadows: true,
 };
@@ -72,13 +73,77 @@ function isOwnWindowHwnd(hwnd) {
 // 「常に最前面（ロック）」を、メインウィンドウ・ページ別画面のすべてに一括で適用する。
 // 色選択ポップアップなどのOS標準ダイアログが開いている間（suspendAlwaysOnTopReassert）は、
 // ここで上書きしてしまうとポップアップが裏に隠れてしまうためスキップする。
-function reassertAlwaysOnTopForAll() {
-  if (suspendAlwaysOnTopReassert) return;
-  const s = loadSettings();
-  for (const w of allAppWindows()) {
-    w.setAlwaysOnTop(!!s.alwaysOnTop, "screen-saver");
-    w.setVisibleOnAllWorkspaces(!!s.alwaysOnTop, { visibleOnFullScreen: true });
+// 画面（ページ）ごとに独立したロック状態。pageLocks が空の古い設定では、従来の alwaysOnTop を全画面共通で使う。
+function isPageLocked(s, pageIndex) {
+  if (s && Array.isArray(s.pageLocks) && s.pageLocks.length > 0) return !!s.pageLocks[pageIndex];
+  return !!(s && s.alwaysOnTop);
+}
+function pageIndexOfWindow(win) {
+  if (win === mainWindow) return 0;
+  for (const [idx, w] of pageWindows.entries()) if (w === win) return idx;
+  return 0;
+}
+// blurのたびに設定ファイルを同期読み込みしないよう、ロック判定用の設定はメモリに持つ（saveSettingsで更新）。
+let lockSettingsCache = null;
+function getLockSettings() {
+  if (!lockSettingsCache) lockSettingsCache = loadSettings();
+  return lockSettingsCache;
+}
+function applyLockToWindow(w, locked, forceRaise) {
+  if (!w || w.isDestroyed()) return;
+  if (!locked) {
+    if (w.isAlwaysOnTop()) w.setAlwaysOnTop(false);
+    w.setVisibleOnAllWorkspaces(false, { visibleOnFullScreen: true });
+    return;
   }
+  if (forceRaise && w.isAlwaysOnTop()) {
+    // 既にオンでも、他アプリの最前面ウィンドウに抜かれていることがある。
+    // 同じ設定を入れ直しても順位は上がらないため、最前面の層の一番上へ出し直す（フォーカスは奪わない）。
+    if (w.isVisible() && !w.isMinimized()) {
+      const hwnd = native.available ? getNativeHwnd(w) : null;
+      // koffiで直接 SetWindowPos(HWND_TOPMOST) を呼ぶ。使えない環境では Electron の moveTop で代用する。
+      if (!(hwnd && native.setTopmostNoActivate(hwnd))) w.moveTop();
+    }
+  } else {
+    w.setAlwaysOnTop(true, "screen-saver");
+  }
+  w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+}
+// ツールチップは、ロック中のアプリ画面より手前（一番上）に保つ
+function raiseTooltipAboveApp() {
+  if (tooltipWindow && !tooltipWindow.isDestroyed() && tooltipWindow.isVisible()) tooltipWindow.moveTop();
+}
+// ファイル・フォルダ選択やバックアップのダイアログを開いている数。開いている間はロックの出し直しを止める
+// （ダイアログがロック中の画面の裏に回らないようにするため）。
+let dialogOpenCount = 0;
+// 押した画面を親にして、開いている間だけその画面を最前面の層へ引き上げてダイアログを出す。
+// 閉じたら、元のロックの状態に戻す。fn には親ウィンドウ（無ければ undefined）が渡される。
+async function runDialogOnTop(win, fn) {
+  const usable = !!(win && !win.isDestroyed());
+  const wasAlwaysOnTop = usable ? win.isAlwaysOnTop() : false;
+  dialogOpenCount++;
+  if (usable) win.setAlwaysOnTop(true, "screen-saver");
+  try {
+    return await fn(usable ? win : undefined);
+  } finally {
+    dialogOpenCount--;
+    if (usable && !win.isDestroyed()) win.setAlwaysOnTop(wasAlwaysOnTop, "screen-saver");
+  }
+}
+function reassertAlwaysOnTopForAll(forceRaise) {
+  if (suspendAlwaysOnTopReassert || dialogOpenCount > 0) return;
+  const s = getLockSettings();
+  for (const w of allAppWindows()) applyLockToWindow(w, isPageLocked(s, pageIndexOfWindow(w)), !!forceRaise);
+  if (forceRaise) raiseTooltipAboveApp();
+}
+// 他アプリが少し遅れて最前面になることがあるため、フォーカスが外れた直後だけ、
+// 間をあけて数回（約0.3秒・1秒・3秒後）出し直す。それ以降は何もしない（常時タイマーは使わない）。
+let lockBurstTimers = [];
+function scheduleLockReassertBurst() {
+  lockBurstTimers.forEach(clearTimeout);
+  lockBurstTimers = [300, 1000, 3000].map((ms) => setTimeout(() => {
+    try { reassertAlwaysOnTopForAll(true); } catch (e) { /* 失敗しても本体の動作は止めない */ }
+  }, ms));
 }
 // 上記ポップアップ用の一時停止フラグは、どのウィンドウでポップアップを開いても
 // 正しく解除できるよう、フォーカスが戻ってきたウィンドウに関わらず共通で扱う。
@@ -382,6 +447,7 @@ function loadSettings() {
 }
 function saveSettings(settings) {
   fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2), "utf-8");
+  lockSettingsCache = settings;
 }
 function applySettings(settings) {
   // ネイティブの色選択ポップアップ表示中などで一時停止している間は、ここで
@@ -394,10 +460,23 @@ function applySettings(settings) {
   } catch (e) {}
 }
 
+// 起動時のウィンドウの大きさ。PC画面（作業領域）の約1.2割の広さ（1/7以下）にして、削除ボタンが出ない小さめの状態で表示する。
+function computeInitialWindowSize() {
+  const BASE_W = 960, BASE_H = 680;
+  try {
+    const wa = screen.getPrimaryDisplay().workArea;
+    const k = Math.min(1, Math.sqrt((wa.width * wa.height * 0.12) / (BASE_W * BASE_H)));
+    return { width: Math.max(420, Math.round(BASE_W * k)), height: Math.max(340, Math.round(BASE_H * k)) };
+  } catch (e) {
+    return { width: BASE_W, height: BASE_H };
+  }
+}
+
 function createWindow() {
+  const initialSize = computeInitialWindowSize();
   const win = new BrowserWindow({
-    width: 960,
-    height: 680,
+    width: initialSize.width,
+    height: initialSize.height,
     backgroundColor: "#14161B",
     autoHideMenuBar: true,
     icon: ICON_PATH,
@@ -433,7 +512,8 @@ function createWindow() {
   // 再適用をスキップし、ポップアップが閉じてこのウィンドウにフォーカスが
   // 戻ったタイミングであらためて最前面設定を復元する。
   win.on("blur", () => {
-    reassertAlwaysOnTopForAll();
+    reassertAlwaysOnTopForAll(true);
+    scheduleLockReassertBurst();
     // Launch-Kからフォーカスが外れた＝他アプリが前面に来た直後なので、
     // そのウィンドウをズーム・スナップの操作対象として記録する。
     rememberForegroundWindowAsExternal();
@@ -460,9 +540,10 @@ function openPageWindow(pageIndex) {
     existing.focus();
     return;
   }
+  const pageInitialSize = computeInitialWindowSize();
   const win = new BrowserWindow({
-    width: 960,
-    height: 680,
+    width: pageInitialSize.width,
+    height: pageInitialSize.height,
     backgroundColor: "#14161B",
     autoHideMenuBar: true,
     icon: ICON_PATH,
@@ -477,9 +558,15 @@ function openPageWindow(pageIndex) {
   win.once("ready-to-show", () => win.show());
   // 色選択ポップアップ等が裏に隠れないよう、メインウィンドウと同じ抑制フラグ・
   // 再適用ロジックを共有する（常に最前面はメイン・ページ別画面すべてに一括適用）。
-  if (loadSettings().alwaysOnTop) win.setAlwaysOnTop(true, "screen-saver");
-  win.on("blur", reassertAlwaysOnTopForAll);
+  // ロックは画面ごとに独立している（この画面のロックがオンのときだけ最前面にする）
+  if (isPageLocked(loadSettings(), idx)) win.setAlwaysOnTop(true, "screen-saver");
+  win.on("blur", () => {
+    reassertAlwaysOnTopForAll(true);
+    scheduleLockReassertBurst();
+  });
   win.on("focus", handleAnyWindowFocus);
+  win.on("hide", () => hideTooltip(true));
+  win.on("minimize", () => hideTooltip(true));
   // 画面の削除で番号が繰り上がると、このウィンドウのキー(idx)が変わることがあるため、
   // 番号ではなくウィンドウ自体で探して外す。
   win.on("closed", () => {
@@ -524,6 +611,7 @@ ipcMain.handle("pages:remove", (event, pageIndex) => {
       return n;
     });
   if (Array.isArray(s.pageThemes) && k < s.pageThemes.length) s.pageThemes.splice(k, 1);
+  if (Array.isArray(s.pageLocks) && k < s.pageLocks.length) s.pageLocks.splice(k, 1);
   s.pageCount = count - 1;
   saveTiles(tiles);
   saveSettings(s);
@@ -702,6 +790,8 @@ ipcMain.handle("settings:load", () => loadSettings());
 ipcMain.handle("settings:save", (event, settings) => {
   const merged = { ...DEFAULT_SETTINGS, ...settings };
   merged.buttonShape = "square"; // ボタンの形は四角のみに固定
+  merged.pageLocks = Array.isArray(merged.pageLocks) ? merged.pageLocks.map(Boolean) : [];
+  if (merged.pageLocks.length > 0) merged.alwaysOnTop = merged.pageLocks.some(Boolean); // 古い版との互換用
   saveSettings(merged);
   applySettings(merged);
   for (const w of allAppWindows()) {
@@ -724,31 +814,53 @@ ipcMain.handle("window:resize", (event, { width, height }) => {
 
 // ---- ファイル選択ダイアログ ----
 ipcMain.handle("dialog:pickFile", async (event, filters) => {
-  // 呼び出し元のウィンドウ（メイン／ページ別画面）を親として渡すことで、
-  // 常に最前面（ロック中）でもファイル選択ダイアログがアプリの裏に隠れず、必ず前面に表示される
+  // 押した画面（メイン／ページ別画面）を親にして、開いている間だけ最前面へ引き上げる
   const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
-  const wasAlwaysOnTop = !!(win && !win.isDestroyed() && win.isAlwaysOnTop());
-  let result;
-  if (win && !win.isDestroyed()) {
-    // ダイアログ自体を最優先の前面レベルに一時的に引き上げる
-    win.setAlwaysOnTop(true, "screen-saver");
-    result = await dialog.showOpenDialog(win, { properties: ["openFile"], filters: filters || [] });
-    if (!win.isDestroyed()) win.setAlwaysOnTop(wasAlwaysOnTop, "screen-saver");
-  } else {
-    result = await dialog.showOpenDialog({ properties: ["openFile"], filters: filters || [] });
-  }
+  const options = { properties: ["openFile"], filters: filters || [] };
+  const result = await runDialogOnTop(win, (w) => (w ? dialog.showOpenDialog(w, options) : dialog.showOpenDialog(options)));
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
 });
 
 // ---- 実際にファイル／アプリを開く ----
-ipcMain.handle("shell:openPath", async (event, targetPath) => {
+ipcMain.handle("shell:openPath", async (event, targetPath, opts) => {
   if (!targetPath || !fs.existsSync(targetPath)) {
     return "ファイルが見つかりません（移動または削除された可能性があります）";
   }
+  const useNative = process.platform === "win32" && native.available;
+  const beforeHwnd = useNative ? native.getForegroundWindowHandle() : 0;
+  // ボタンでファイル・フォルダを開くときも、ロック（常に最前面）を優先する（ロックを一時的に解いたりしない）
   const errorMessage = await shell.openPath(targetPath);
-  return errorMessage || null;
+  if (errorMessage) return errorMessage;
+  // 最大化はボタンごとの設定（ボタンの追加・編集画面で、ファイル・フォルダのボタンにだけ付ける）
+  // チェックあり→最大化、チェックなし→通常の大きさに戻す（Windowsやアプリが前回の最大化状態を覚えていて、
+  // 毎回最大で開いてしまうことがあるため）。ファイル・フォルダ以外（アプリの起動など）は何もしない。
+  if (opts && typeof opts.maximize === "boolean" && useNative && isMaximizableTarget(targetPath)) {
+    maximizeNewForegroundWindow(beforeHwnd, opts.maximize ? 3 : 9); // 3=SW_MAXIMIZE, 9=SW_RESTORE
+  }
+  return null;
 });
+
+// フォルダ・書類などを開いたとき（アプリ本体の起動は対象外）、新しく前面に出たウィンドウを最大化する
+function isMaximizableTarget(p) {
+  try {
+    if (fs.statSync(p).isDirectory()) return true;
+  } catch (e) { return false; }
+  return ![".exe", ".lnk", ".bat", ".cmd", ".url", ".msi", ".ps1"].includes(path.extname(p).toLowerCase());
+}
+function maximizeNewForegroundWindow(beforeHwnd, showCmd) {
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    const h = native.getForegroundWindowHandle();
+    if (h && h !== beforeHwnd && !isOwnWindowHwnd(h)) {
+      clearInterval(timer);
+      native.showWindowHandle(h, showCmd);
+      return;
+    }
+    if (tries >= 20) clearInterval(timer); // 約5秒待っても新しいウィンドウが前に出なければあきらめる
+  }, 250);
+}
 
 // ---- Windows標準の「メモ」（notepad.exe）専用の開き方 ----
 // メモ（Windows 11の新しいメモ帳）は単一インスタンス・タブ方式になっており、
@@ -864,18 +976,24 @@ let tooltipSeq = 0;
 const TOOLTIP_HTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 html, body { margin: 0; background: transparent; overflow: hidden; }
 body { padding: 8px; opacity: 0; font-family: 'Space Grotesk', 'Yu Gothic UI', 'Segoe UI', system-ui, sans-serif; }
-#tip { display: inline-block; background: #FAFAFA; color: #1A1A1A; padding: 5px 10px; border-radius: 8px;
-  font-size: 12px; line-height: 1.4; white-space: nowrap; text-align: left; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
-#n { font-weight: 600; }
-#k { color: #52525B; margin-top: 3px; font-size: 11px; font-family: 'JetBrains Mono', Consolas, monospace; }
+#tip { display: inline-block; background: #FAFAFA; color: #1A1A1A; padding: 1px 10px; border-radius: 8px;
+  font-size: 10.5px; line-height: 1.4; white-space: nowrap; text-align: left; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
+#n { font-weight: 600; font-size: 10.5px; }
+#k { color: #52525B; margin-top: 1px; font-size: 7px; font-family: 'JetBrains Mono', Consolas, monospace; }
 </style></head><body><div id="tip"><div id="n"></div><div id="k"></div></div>
 <script>
 function setTip(name, key) {
   document.body.style.opacity = '0';
   document.getElementById('n').textContent = name;
   var k = document.getElementById('k');
-  k.textContent = key || '';
+  k.textContent = '';
   k.style.display = key ? 'block' : 'none';
+  if (key) {
+    // 修飾キー（Ctrl Alt Sft）は灰色、最後の英数字キーだけ黒にする
+    var i = key.lastIndexOf(' ');
+    if (i >= 0) { var m = document.createElement('span'); m.textContent = key.slice(0, i + 1); k.appendChild(m); }
+    var l = document.createElement('span'); l.textContent = i >= 0 ? key.slice(i + 1) : key; l.style.color = '#1A1A1A'; k.appendChild(l);
+  }
   var r = document.getElementById('tip').getBoundingClientRect();
   return { w: Math.ceil(r.width), h: Math.ceil(r.height) };
 }
@@ -900,18 +1018,28 @@ function ensureTooltipWindow() {
 // ウィンドウを隠すと描画が止まり、次に表示したとき直前の内容が一瞬だけ残って見えてしまうため
 // （別のボタンに移ったとき、前のツールチップが少し出てから新しいものに切り替わっていた）。
 // アプリ画面自体が隠れる・最小化するときだけ、ウィンドウごと隠す。
+let tooltipOwnerId = null; // いまツールチップを出している画面（webContents）。他の画面の再描画で消されないようにする
 function hideTooltip(hideWindow) {
   tooltipSeq++;
+  if (hideWindow === true) tooltipOwnerId = null;
   if (!tooltipWindow || tooltipWindow.isDestroyed()) return;
   tooltipWindow.webContents.executeJavaScript("document.body.style.opacity='0'").catch(() => {});
   if (hideWindow === true && tooltipWindow.isVisible()) tooltipWindow.hide();
 }
-ipcMain.on("tooltip:hide", () => hideTooltip(false));
+ipcMain.on("tooltip:hide", (event) => {
+  // 別の画面が表示中のツールチップは、その画面以外からの「消す」では消さない
+  if (tooltipOwnerId !== null && event.sender.id !== tooltipOwnerId) return;
+  hideTooltip(false);
+});
 ipcMain.on("tooltip:show", async (event, payload) => {
   try {
     if (!payload || !payload.rect) return;
-    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized()) return;
+    // メインだけでなく、ページ別画面（2ページ目以降）からの表示にも対応するため、
+    // 送信元のウィンドウを基準にする。
+    const srcWin = BrowserWindow.fromWebContents(event.sender);
+    if (!srcWin || srcWin.isDestroyed() || !srcWin.isVisible() || srcWin.isMinimized()) return;
     const seq = ++tooltipSeq;
+    tooltipOwnerId = event.sender.id;
     await ensureTooltipWindow();
     if (seq !== tooltipSeq || !tooltipWindow || tooltipWindow.isDestroyed()) return;
     const name = String(payload.name || "").slice(0, 200);
@@ -919,8 +1047,8 @@ ipcMain.on("tooltip:show", async (event, payload) => {
     const size = await tooltipWindow.webContents.executeJavaScript(`setTip(${JSON.stringify(name)}, ${JSON.stringify(key)})`);
     if (seq !== tooltipSeq || !tooltipWindow || tooltipWindow.isDestroyed()) return;
     const PAD = 8; // 影の分の余白（HTML側のbody paddingと合わせる）
-    const GAP = 6;
-    const cb = mainWindow.getContentBounds();
+    const GAP = -1; // ボタン（またはアイコン）の下端とツールチップの間隔（負の値＝少し重ねる。座標は整数なので-0.5は指定できず、-1pxにしている）
+    const cb = srcWin.getContentBounds();
     const r = payload.rect;
     const tileLeft = cb.x + r.left, tileRight = cb.x + r.right;
     const tileTop = cb.y + r.top, tileBottom = cb.y + r.bottom;
@@ -934,7 +1062,10 @@ ipcMain.on("tooltip:show", async (event, payload) => {
     if (boxY + size.h > wa.y + wa.height) boxY = Math.round(tileTop - GAP - size.h);
     boxX = Math.max(wa.x + 2, Math.min(boxX, wa.x + wa.width - size.w - 2));
     boxY = Math.max(wa.y + 2, boxY);
-    tooltipWindow.setBounds({ x: boxX - PAD, y: boxY - PAD, width: size.w + PAD * 2, height: size.h + PAD * 2 });
+    const tipBounds = { x: boxX - PAD, y: boxY - PAD, width: size.w + PAD * 2, height: size.h + PAD * 2 };
+    tooltipWindow.setBounds(tipBounds);
+    // 拡大率の異なる別モニターへ移すと、1回の指定では位置・大きさがずれることがあるため、もう一度指定する
+    tooltipWindow.setBounds(tipBounds);
     // ロック（常に最前面）中のアプリ画面もTOPMOST同士で、後から前面に出し直されるため、
     // ツールチップも表示のたびに最前面の層へ出し直し、その中でも一番上に持ってくる
     // （これをしないとアプリ画面の後ろに隠れて見えない）。
@@ -1962,16 +2093,11 @@ ipcMain.on("guide:close", () => {
 });
 
 // ---- フォルダ選択ダイアログ ----
-ipcMain.handle("dialog:pickFolder", async () => {
-  const wasAlwaysOnTop = !!(mainWindow && mainWindow.isAlwaysOnTop());
-  let result;
-  if (mainWindow) {
-    mainWindow.setAlwaysOnTop(true, "screen-saver");
-    result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
-    mainWindow.setAlwaysOnTop(wasAlwaysOnTop, "screen-saver");
-  } else {
-    result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
-  }
+ipcMain.handle("dialog:pickFolder", async (event) => {
+  // 押した画面を親にする（2ページ目以降の画面から押しても、その画面の前に出る）
+  const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  const options = { properties: ["openDirectory"] };
+  const result = await runDialogOnTop(win, (w) => (w ? dialog.showOpenDialog(w, options) : dialog.showOpenDialog(options)));
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
 });
@@ -2197,10 +2323,9 @@ ipcMain.handle("app:reset", (event) => {
 ipcMain.handle("backup:export", async (event, data, defaultName) => {
   // 画面単体のバックアップでは「mission-deck-screen2.json」のような名前を初期値にする（安全な文字だけ許可）
   const safeName = typeof defaultName === "string" && /^[\w.\-]{1,60}\.json$/.test(defaultName) ? defaultName : "mission-deck-backup.json";
-  const result = await dialog.showSaveDialog({
-    defaultPath: safeName,
-    filters: [{ name: "JSON", extensions: ["json"] }],
-  });
+  const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  const saveOptions = { defaultPath: safeName, filters: [{ name: "JSON", extensions: ["json"] }] };
+  const result = await runDialogOnTop(win, (w) => (w ? dialog.showSaveDialog(w, saveOptions) : dialog.showSaveDialog(saveOptions)));
   if (result.canceled || !result.filePath) return "キャンセルされました";
   try {
     fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), "utf-8");
@@ -2233,11 +2358,10 @@ function sanitizeBackupData(raw) {
   }
   return out;
 }
-ipcMain.handle("backup:import", async () => {
-  const result = await dialog.showOpenDialog({
-    properties: ["openFile"],
-    filters: [{ name: "JSON", extensions: ["json"] }],
-  });
+ipcMain.handle("backup:import", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  const openOptions = { properties: ["openFile"], filters: [{ name: "JSON", extensions: ["json"] }] };
+  const result = await runDialogOnTop(win, (w) => (w ? dialog.showOpenDialog(w, openOptions) : dialog.showOpenDialog(openOptions)));
   if (result.canceled || result.filePaths.length === 0) return { error: "キャンセルされました" };
   try {
     const raw = fs.readFileSync(result.filePaths[0], "utf-8");
