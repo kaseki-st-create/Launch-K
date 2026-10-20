@@ -58,7 +58,6 @@ async function applyDimensionValue(settingsKey, value) {
   await persistSettings();
   renderGrid();
   renderSettingsPanel();
-  peekBehindPanel();
 }
 
 function buildColorRow(container, currentColor, onPick) {
@@ -501,7 +500,7 @@ const ICON_SIZE_KEYS = ["large", "medium", "small"];
 const PAGE_SETTING_KEYS = [
   "themeMode", "customColor", "bgImagePath", "bgImageFit", "bgImageBrightness", "panelColorOverride", "iconSize",
   "accent", "gridColumns", "gridRows", "showNameLabel", "showHotkeyLabel", "showShadows", "panelOpacity",
-  "iconRingEnabled", "iconRingBrightness",
+  "iconRingEnabled", "iconRingBrightness", "gapZero", "showTooltip",
 ];
 // 以前のバージョンでは全画面共通（settings直下）だったキー。
 // 画面別の値がまだ無いときだけ、その共通値を引き継ぐ（＝更新しても見た目が変わらない）。
@@ -543,6 +542,8 @@ function sanitizePageSetting(key, value, fallback) {
     case "panelColorOverride":
       return typeof value === "string" && (value === "" || /^#[0-9a-fA-F]{6}$/.test(value)) ? value : fallback;
     case "iconRingEnabled":
+    case "gapZero":
+    case "showTooltip":
       return typeof value === "boolean" ? value : fallback;
     case "iconRingBrightness":
       return typeof value === "number" && value >= 0 && value <= 100 ? Math.round(value) : fallback;
@@ -596,6 +597,8 @@ const DEFAULT_SETTINGS = {
   iconSize: "large",
   iconRingEnabled: false,
   iconRingBrightness: 55,
+  gapZero: false, // ボタン間の距離を0にする（画面ごと）
+  showTooltip: true, // ボタンにマウスを乗せたときのツールチップ表示（画面ごと）
   accent: "#FF6B5E",
   buttonShape: "square",
   gridColumns: "auto",
@@ -621,6 +624,12 @@ const GRID_ROW_GAP = 7.5; // ボタン同士の上下の間隔（CSSの.gridのg
 const MIN_TILE = 30;   // 行数・列数を固定しているときの絶対的な下限
 const MAX_TILE = 220;  // これより大きくはしない
 const AUTO_MIN_TILE = 56; // 行数・列数が両方「自動」のときに縮小してよい下限（これより小さいと逆に見づらいため、MIN_TILEより少し大きめ）
+const WINDOW_AREA_RATIO = 0.09; // 起動時・プリセット適用時のウィンドウ（内容領域）の広さ＝作業領域の9%
+const EDIT_LOCK_AREA_RATIO = 1 / 12; // ウィンドウがこれ以下の広さなら編集・削除を出さない
+const EDIT_LOCK_TILE = 36; // ボタンの大きさ（px）がこれ以下でも編集・削除を出さない
+// 「ボタン間の距離を0にする」は画面ごとの設定。オンのときは左右・上下の間隔を0にする。
+function gridGap() { return currentPageTheme().gapZero === true ? 0 : GRID_GAP; }
+function gridRowGap() { return currentPageTheme().gapZero === true ? 0 : GRID_ROW_GAP; }
 const MAX_PAGE_COUNT = 6; // ページの最大数（1ページ最大8×8=64個 × 最大6ページ＝合計最大384個）
 
 // このウィンドウが担当する「ページ」番号。ページ0は常にメインウィンドウで、
@@ -855,6 +864,8 @@ function applyTheme() {
   applyTitleVisibility();
   const pt = currentPageTheme();
   document.body.classList.toggle("no-btn-shadow", pt.showShadows === false);
+  // 距離0は「表示上の上書き」だけ。保存済みの影・枠の設定は書き換えないので、オフに戻せば元の見た目に戻る。
+  document.body.classList.toggle("gap-zero", pt.gapZero === true);
   const root = document.documentElement.style;
   const preset = pt.themeMode === "custom" ? deriveThemeFromColor(pt.customColor || "#3A3F4B") : (THEME_PRESETS[pt.themeMode] || THEME_PRESETS.black);
   // 画像背景のときだけ、アイコンボタン裏の枠色をユーザー指定の色に差し替えられる（透明度は既存のスライダーと共通）。
@@ -950,13 +961,64 @@ lockBtn.addEventListener("click", async () => {
 });
 
 function applyPresetWindowSize(preset) {
-  const gap = GRID_GAP;
-  const rowGap = GRID_ROW_GAP;
-  const gridWidth = preset.columns * BASE_TILE + (preset.columns - 1) * gap;
-  const gridHeight = preset.rows * BASE_TILE + (preset.rows - 1) * rowGap;
-  const width = gridWidth + 12 * 2 + 4;
-  const height = gridHeight + 90 + 14 * 2;
+  // ウィンドウ（内容領域）の広さが作業領域の約9%になるように、行列の形に合わせてボタンの大きさを逆算する。
+  const gap = gridGap();
+  const rowGap = gridRowGap();
+  const waW = window.screen.availWidth || window.screen.width;
+  const waH = window.screen.availHeight || window.screen.height;
+  const target = waW * waH * WINDOW_AREA_RATIO;
+  // 実際に使う行数（ボタン数＋追加ボタン）だけで高さを決める。使わない行の空白は作らない。
+  const presetUsedRows = Math.max(1, Math.min(preset.rows, Math.ceil((currentPageTiles().length + 1) / preset.columns)));
+  const top = Math.max(0, gridEl.getBoundingClientRect().top) + 12; // 上の余白＋下の余白（computeLayoutと同じ）
+  const dims = (t) => ({
+    w: 24 + preset.columns * t + (preset.columns - 1) * gap,
+    h: top + presetUsedRows * t + (presetUsedRows - 1) * rowGap,
+  });
+  let lo = MIN_TILE, hi = MAX_TILE;
+  for (let i = 0; i < 30; i++) {
+    const mid = (lo + hi) / 2;
+    const d = dims(mid);
+    if (d.w * d.h > target) hi = mid; else lo = mid;
+  }
+  const t = Math.max(MIN_TILE, Math.min(MAX_TILE, Math.floor(lo)));
+  const d = dims(t);
+  const width = Math.min(Math.ceil(d.w) + 1, waW);
+  const height = Math.min(Math.ceil(d.h) + 1, waH);
   window.api.resizeWindow({ width, height });
+}
+
+// 行列が途切れず収まる最小のウィンドウサイズ（内容領域）をメインプロセスに伝える。
+// これ未満には縮められず、行列を増やして足りなくなったときは自動で広がる。
+const PAGER_MIN_WIDTH = 16 * 1.9 * 2 + 16 * 0.33; // 「1 / 2」を消した◀▶だけの幅（下限サイズ時）
+function syncWindowMinSize() {
+  try {
+    const pl = currentPageTheme();
+    const cols = pl.gridColumns !== "auto" ? Math.max(1, Number(pl.gridColumns)) : 1;
+    let rows = pl.gridRows !== "auto" ? Math.max(1, Number(pl.gridRows)) : 1;
+    if (pl.gridColumns !== "auto" && pl.gridRows !== "auto") {
+      rows = Math.max(1, Math.min(rows, Math.ceil((currentPageTiles().length + 1) / cols))); // 実際に使っている行数
+    }
+    const gap = gridGap();
+    const rowGap = gridRowGap();
+    const gridTop = gridEl.getBoundingClientRect().top;
+    const gridW = 24 + cols * MIN_TILE + (cols - 1) * gap + 2;
+    const gridH = Math.ceil(gridTop + 12 + rows * MIN_TILE + (rows - 1) * rowGap) + 1;
+    // 上の操作列（◀▶・🔒・☰）が重ならない最小幅
+    let topW = lastTotalPages > 1 ? Math.ceil(12 + PAGER_MIN_WIDTH + 74 + 6) : 96;
+    if (settings.showTitle === true) {
+      const titleEl = document.getElementById("appTitle");
+      if (titleEl) topW = Math.max(topW, Math.ceil(24 + 84 + titleEl.scrollWidth));
+    }
+    window.api.setMinContentSize({ width: Math.max(gridW, topW), height: gridH });
+  } catch (e) {}
+}
+
+// ウィンドウが小さく編集できない状態かどうか（面積が作業領域の1/12以下、またはボタンが小さすぎる）
+let lastEditLocked = null;
+function isEditLocked(tileSize) {
+  const areaWin = window.innerWidth * window.innerHeight;
+  const areaScr = (window.screen.availWidth || window.screen.width) * (window.screen.availHeight || window.screen.height);
+  return (areaScr > 0 && areaWin <= areaScr * EDIT_LOCK_AREA_RATIO) || tileSize <= EDIT_LOCK_TILE;
 }
 
 async function persistTiles() {
@@ -1029,25 +1091,32 @@ let lastClampNotice = null;
 // レイアウトの優先順位：
 // ・行数/列数が両方「自動」→ 画面幅に沿って列数・行数が変わる（アイコンサイズはほぼ一定）
 // ・行数or列数を固定 → その数を絶対に保ち、代わりにアイコンサイズが自動で伸縮する（アイコンは常に最優先度が低い）
+// 行数・列数を両方固定しているときは、実際に使っている行数（ボタン数＋追加ボタン）を基準に、
+// ウィンドウの高さ・ボタンの大きさ・最小サイズを決める（使っていない行ぶんの空白を作らない）。
+// 行が増えたときは、ボタンの大きさを保ったまま、ウィンドウを1行ぶんずつ下へ広げる。
+let growHint = 0; // 広げている最中だけ、広がった後の高さで先に計算するための余裕（px）
+let lastUsedRows = null, lastLayoutTile = 0, lastLayoutKey = "", lastLayoutInnerW = 0;
 function computeLayout() {
   const containerWidth = gridEl.clientWidth || Math.max(300, window.innerWidth - 24);
-  const gap = GRID_GAP;
-  const rowGap = GRID_ROW_GAP;
+  const gap = gridGap();
+  const rowGap = gridRowGap();
   const gridTop = gridEl.getBoundingClientRect().top || 160;
   // 下端の無駄な余白をさらに詰めるため、安全マージンを最小限まで削っている
   // （#appのpadding-bottom=4pxと、行数計算の丸め誤差を防ぐための予備8pxの合計＝12px）。
-  const availableHeight = Math.max(MIN_TILE, window.innerHeight - gridTop - 4 - 8);
+  const availableHeight = Math.max(MIN_TILE, window.innerHeight + growHint - gridTop - 4 - 8);
 
   const pageLayout = currentPageTheme(); // 行数・列数はこのウィンドウの画面ごとの設定
   const colsFixed = pageLayout.gridColumns !== "auto";
   const rowsFixed = pageLayout.gridRows !== "auto";
   let columns, rows, tileSize, clamp = null;
+  let usedRows = null; // 行列とも固定のときだけ使う「実際に使っている行数」
 
   if (colsFixed && rowsFixed) {
     columns = Math.max(1, Number(pageLayout.gridColumns));
     rows = Math.max(1, Number(pageLayout.gridRows));
+    usedRows = Math.max(1, Math.min(rows, Math.ceil((currentPageTiles().length + 1) / columns)));
     const widthBased = (containerWidth - gap * (columns - 1)) / columns;
-    const heightBased = (availableHeight - rowGap * (rows - 1)) / rows;
+    const heightBased = (availableHeight - rowGap * (usedRows - 1)) / usedRows;
     tileSize = Math.floor(Math.min(widthBased, heightBased));
   } else if (colsFixed) {
     columns = Math.max(1, Number(pageLayout.gridColumns));
@@ -1086,11 +1155,19 @@ function computeLayout() {
     } else {
       // 何を試しても収まらない極端に狭いケースのフォールバック
       columns = maxColsByWidth;
-      rows = Math.max(1, Math.ceil(totalItems / columns));
+      // 縦に収まらない分はサブページへ送る（はみ出して途切れないようにする）
+      rows = Math.max(1, Math.min(maxRowsByHeight, Math.ceil(totalItems / columns)));
       tileSize = AUTO_MIN_TILE;
     }
   }
 
+  // どの指定でも、決めた行列がウィンドウの中に収まる大きさまで必ず縮める（途切れ防止。下限は MIN_TILE）。
+  {
+    const fitW = Math.floor((containerWidth - gap * (columns - 1)) / columns);
+    const fitRows = usedRows || rows;
+    const fitH = Math.floor((availableHeight - rowGap * (fitRows - 1)) / fitRows);
+    tileSize = Math.min(tileSize, fitW, fitH);
+  }
   if (tileSize < MIN_TILE) { tileSize = MIN_TILE; clamp = "min"; }
   if (tileSize > MAX_TILE) { tileSize = MAX_TILE; clamp = "max"; }
 
@@ -1100,7 +1177,7 @@ function computeLayout() {
   }
   lastClampNotice = clamp;
 
-  return { columns, rows, perPage: columns * rows, tileSize };
+  return { columns, rows, perPage: columns * rows, tileSize, usedRows: usedRows || rows };
 }
 
 function currentPageTiles() {
@@ -1132,15 +1209,35 @@ function renderGrid() {
   const gridTopUsed = gridEl.getBoundingClientRect().top; // この値でレイアウトを計算する（後でページ切替UIの有無でずれたら計算し直す）
   const pageTiles = currentPageTiles();
   emptyHintEl.style.display = pageTiles.length === 0 ? "block" : "none";
-  const { columns, rows, perPage, tileSize } = computeLayout();
+  let layout = computeLayout();
+  {
+    const plg = currentPageTheme();
+    const fixedBoth = plg.gridColumns !== "auto" && plg.gridRows !== "auto";
+    const key = `${layout.columns}x${layout.rows}x${gridGap()}`;
+    // ボタンを増やして使う行が増えたときは、ボタンの大きさを保ったまま、ウィンドウを増えた行ぶんだけ下へ広げる。
+    if (fixedBoth && lastUsedRows !== null && key === lastLayoutKey && layout.usedRows > lastUsedRows
+        && lastLayoutTile > 0 && window.innerWidth === lastLayoutInnerW && growHint === 0) {
+      const needH = Math.ceil(gridEl.getBoundingClientRect().top + 12 + layout.usedRows * lastLayoutTile + (layout.usedRows - 1) * gridRowGap()) + 1;
+      if (needH > window.innerHeight) {
+        growHint = needH - window.innerHeight;
+        window.api.resizeWindow({ width: window.innerWidth, height: needH })
+          .catch(() => {})
+          .finally(() => { growHint = 0; renderGrid(); }); // 実際に広がれなかった場合は、ここで本来の大きさに計算し直す
+        layout = computeLayout();
+      }
+    }
+    lastUsedRows = fixedBoth ? layout.usedRows : null;
+    lastLayoutTile = layout.tileSize;
+    lastLayoutKey = key;
+    lastLayoutInnerW = window.innerWidth;
+  }
+  const { columns, rows, perPage, tileSize, usedRows } = layout;
   gridEl.style.gridTemplateColumns = `repeat(${columns}, ${tileSize}px)`;
-  // サブページ（画面に入りきらない分の送り）の切替ボタンが、埋まっている行数によって
-  // 上下にガタつかないよう、常に「1ページ分フルに埋まったときの高さ」を確保しておく。
-  gridEl.style.minHeight = Math.max(0, rows * tileSize + (rows - 1) * GRID_ROW_GAP) + "px";
-  // 「名前を表示」「ショートカットキーを表示」が両方オフのときは、
-  // ラベル用のスペースが不要になるため、アイコンを枠のギリギリまで大きく表示する。
+  // 実際に使っている行ぶんの高さを確保する（サブページがあるときは、1ページ分フルの行数になる）。
+  gridEl.style.minHeight = Math.max(0, usedRows * tileSize + (usedRows - 1) * gridRowGap()) + "px";
+  // ボタン下の名前・ショートカット表示は廃止したため、アイコンは常に枠のギリギリまで大きく表示する。
   const pageView = currentPageTheme();
-  const labelsHidden = pageView.showNameLabel === false && pageView.showHotkeyLabel === false;
+  const labelsHidden = true; // ボタン下の名前・ショートカット表示は廃止（名前などはツールチップで確認できる）
   // アイコンの大中小（枠に対する占有率）はページごとのテーマ設定から取得する。
   const iconSizeKey = ICON_SIZE_KEYS.includes(pageView.iconSize) ? pageView.iconSize : "large";
   const iconSizeRatios = ICON_SIZE_RATIOS[iconSizeKey];
@@ -1153,6 +1250,10 @@ function renderGrid() {
   // 縦に並べて右端に寄せる（CSSの .grid.compact-tiles）。
   gridEl.classList.toggle("compact-tiles", tileSize < 110);
   gridEl.classList.toggle("small-window", isSmallWindow());
+  const editLocked = isEditLocked(tileSize);
+  gridEl.classList.toggle("edit-locked", editLocked);
+  if (lastEditLocked === false && editLocked) showToast("ウィンドウが小さいため、編集・削除はできません。広げると使えます");
+  lastEditLocked = editLocked;
 
   const combined = [...pageTiles, { __addTile: true }];
   const totalPages = Math.max(1, Math.ceil(combined.length / perPage));
@@ -1183,6 +1284,7 @@ function renderGrid() {
     gridRelayoutGuard = true;
     try { renderGrid(); } finally { gridRelayoutGuard = false; }
   }
+  syncWindowMinSize();
 }
 
 // 並べ替えドラッグの直後、移動したボタンが今見えているサブページの外に
@@ -1233,6 +1335,16 @@ function renderPager(totalPages) {
   // （iOSのホーム画面編集などでおなじみの「エッジオートフリップ」）。
   attachPagerDragFlip(prevBtn, -1, totalPages);
   attachPagerDragFlip(nextBtn, 1, totalPages);
+  fitPager();
+}
+// 右上の🔒と重なりそうなときだけ「1 / 2」の文字を消して◀▶だけにする（それ以上の省略はしない）。
+function fitPager() {
+  const pager = document.getElementById("headerPager");
+  if (!pager || pager.style.display === "none") return;
+  pager.classList.remove("no-count");
+  const pr = pager.getBoundingClientRect();
+  const lr = lockBtn.getBoundingClientRect();
+  if (pr.height > 0 && pr.top < lr.bottom && pr.bottom > lr.top && pr.right > lr.left - 6) pager.classList.add("no-count");
 }
 
 const PAGER_DRAG_FLIP_DELAY_MS = 700;
@@ -1313,20 +1425,10 @@ function buildTileElement(tile) {
 
   const btn = document.createElement("button");
   btn.className = "tile";
-  const pageViewForLabels = currentPageTheme();
-  const hotkeyLabel = tile.hotkey && pageViewForLabels.showHotkeyLabel
-    ? `<div class="tile-hotkey mono">${escapeHtml(formatHotkeyKeyOnly(tile.hotkey))}</div>`
-    : "";
-  const nameStyle = tile.matchNameColor ? ` style="color:${safeColor(tile.color)}"` : "";
-  const nameLabel = pageViewForLabels.showNameLabel !== false
-    ? `<div class="tile-name"${nameStyle}>${escapeHtml(tile.name || "無題")}</div>`
-    : "";
   btn.innerHTML = `
     <div class="tile-icon-wrap">
       <div class="tile-icon" style="${iconBg(tile)}">${iconInner(tile)}</div>
     </div>
-    ${nameLabel}
-    ${hotkeyLabel}
   `;
 
   const isHoldType = (tile.type === "volume" || tile.type === "brightness" || tile.type === "zoom") && (tile.action === "up" || tile.action === "down" || tile.action === "in" || tile.action === "out");
@@ -1352,6 +1454,7 @@ function buildTileElement(tile) {
   // ツールチップ（名前・ショートカット表示）は、アプリ画面の枠で見切れないよう、
   // 画面内のDOMではなく、メインプロセス側の専用ウィンドウに表示する（画面外にもはみ出せる）。
   wrap.addEventListener("mouseenter", () => {
+    if (currentPageTheme().showTooltip === false) return; // 画面ごとの設定でツールチップをオフにできる
     // アイコン枠（ボタン裏の枠）が見えない設定（透明度0%）のときは、枠ではなくアイコンの下に出す
     const iconEl = btn.querySelector(".tile-icon");
     const r = (currentPanelOpacity() <= 0 && iconEl) ? iconEl.getBoundingClientRect() : btn.getBoundingClientRect();
@@ -2257,10 +2360,6 @@ function renderModal() {
     <div id="iconSpecific"></div>
     <div class="field-label">カラー</div>
     <div class="color-row" id="colorRow"></div>
-    <label class="checkbox-row">
-      <input type="checkbox" id="matchNameColorInput" ${t.matchNameColor ? "checked" : ""} />
-      ボタンの名前のカラーも変更する
-    </label>
     ${settings.pageCount > 1 ? `
     <div class="field-label" style="margin-top:14px;">表示する画面</div>
     <div class="type-row" id="pageRow"></div>
@@ -2818,7 +2917,6 @@ function renderModal() {
       if (swatch) swatch.style.color = c;
     }
   });
-  document.getElementById("matchNameColorInput").addEventListener("change", (e) => { t.matchNameColor = e.target.checked; });
 
   document.getElementById("nameInput").addEventListener("input", (e) => (t.name = e.target.value));
   const urlInput = document.getElementById("urlInput");
@@ -3178,25 +3276,16 @@ closeOnBackdropClick(settingsOverlayEl, closeSettingsPanel);
 hamburgerBtn.addEventListener("click", openSettingsPanel);
 document.getElementById("closeSettingsBtn").addEventListener("click", closeSettingsPanel);
 
-const PEEK_DURATION_MS = 550; // レイアウト・表示系の設定を変えたときに裏のアイコンを確認できる時間
-let peekTimer = null;
-function peekBehindPanel(duration = PEEK_DURATION_MS) {
-  settingsOverlayEl.classList.add("peeking");
-  clearTimeout(peekTimer);
-  peekTimer = setTimeout(() => { settingsOverlayEl.classList.remove("peeking"); }, duration);
-}
-
 // 「画像背景」を押したがまだ画像が決まっていない間、ファイル/画面キャプチャの選択欄を出しておくためのフラグ
 let bgPickerOpen = false;
 // 設定パネルの「挙動」「見た目」セクションの開閉状態（既定は開いた状態。
 // アプリ再起動でリセットされる程度の一時的な状態なので設定ファイルには保存しない）
-const settingsSectionOpen = { behavior: true, appearance: true };
 function renderSettingsPanel() {
   // 複数画面あるときは、画面ごとに独立している項目の見出しに「（画面Nのみ）」を付ける。
   const scope = settings.pageCount > 1 ? `（画面${WINDOW_PAGE_INDEX + 1}のみ）` : "";
   const pt = currentPageTheme();
   settingsBodyEl.innerHTML = `
-    <h2 style="font-size:17px;font-weight:700;margin-bottom:16px;">設定</h2>
+    <h2 style="font-size:17px;font-weight:700;margin-bottom:10px;">設定</h2>
     <div class="settings-section">
       <div class="toggle-row"><span>タイトル（Launch-K）を表示</span><input type="checkbox" id="showTitleChk" ${settings.showTitle === true ? "checked" : ""} /></div>
       <div class="toggle-row"><span>Windows起動時に自動起動</span><input type="checkbox" id="loginChk" ${settings.launchAtLogin ? "checked" : ""} /></div>
@@ -3212,53 +3301,39 @@ function renderSettingsPanel() {
     </div>
     <div class="settings-section">
       <h3>レイアウト${scope}</h3>
-      <div class="field-label">行数</div>
-      <div class="type-row" id="rowsRow"></div>
-      <div class="field-label">列数</div>
-      <div class="type-row" id="columnsRow"></div>
+      <div class="dim-pair">
+        <div><div class="field-label">行数</div><div class="type-row" id="rowsRow"></div></div>
+        <div><div class="field-label">列数</div><div class="type-row" id="columnsRow"></div></div>
+      </div>
       <div class="path-preview" style="margin-top:0;">行列数は、1ページにつきそれぞれ最大8まで設定できます。</div>
-      <div class="field-label" style="margin-top:14px;">プリセット</div>
-      <div style="display:flex;gap:8px;margin-bottom:8px;">
-        <input type="text" id="presetNameInput" placeholder="プリセット名" style="flex:1;background:var(--panel-alt);border:1px solid var(--border);border-radius:10px;padding:8px 10px;color:var(--text);font-size:12px;" />
+      <div class="field-label" style="margin-top:8px;">プリセット</div>
+      <div style="display:flex;gap:8px;margin-bottom:6px;">
+        <input type="text" id="presetNameInput" placeholder="プリセット名" style="flex:1;background:var(--panel-alt);border:1px solid var(--border);border-radius:10px;padding:8px 10px;color:var(--text);font-size:12px;margin-bottom:0;" />
         <button class="btn default" id="savePresetBtn">現在の形で保存</button>
       </div>
       <div class="type-row" id="presetRow"></div>
       <div class="path-preview" id="presetHint"></div>
     </div>
     <div class="settings-section">
-      <div class="icon-group-header" id="behaviorSectionHeader">
-        <span>挙動${scope}</span>
-        <span class="icon-group-caret${settingsSectionOpen.behavior ? " open" : ""}">▾</span>
-      </div>
-      <div class="icon-group-body" id="behaviorSectionBody" style="${settingsSectionOpen.behavior ? "" : "display:none;"}">
-        <div class="toggle-row"><span>ボタンに名前を表示</span><input type="checkbox" id="showNameChk" ${pt.showNameLabel ? "checked" : ""} /></div>
-        <div class="toggle-row"><span>ボタンにショートカットキーを表示</span><input type="checkbox" id="showHotkeyChk" ${pt.showHotkeyLabel ? "checked" : ""} /></div>
-      </div>
-    </div>
-    <div class="settings-section">
-      <div class="icon-group-header" id="appearanceSectionHeader">
-        <span>見た目${scope}</span>
-        <span class="icon-group-caret${settingsSectionOpen.appearance ? " open" : ""}">▾</span>
-      </div>
-      <div class="icon-group-body" id="appearanceSectionBody" style="${settingsSectionOpen.appearance ? "" : "display:none;"}">
-        <div class="toggle-row"><span>ボタンに影を付ける</span><input type="checkbox" id="showShadowsChk" ${pt.showShadows !== false ? "checked" : ""} /></div>
-        <div class="field-label" style="margin-top:10px;">アイコンボタン裏の枠の透明度</div>
-        <div style="display:flex;align-items:center;gap:10px;">
-          <input type="range" id="panelOpacitySlider" min="0" max="100" step="1" value="${Math.round(currentPanelOpacity() * 100)}" style="flex:1;" />
-          <span id="panelOpacityValue" class="path-preview" style="margin:0;width:44px;text-align:right;">${Math.round(currentPanelOpacity() * 100)}%</span>
-        </div>
-        <div class="field-label" style="margin-top:10px;">ボタンのアイコンの大きさ</div>
-        <div class="type-row" id="iconSizeRow"></div>
-        <div class="toggle-row" style="margin-top:10px;"><span>アイコンの周りに囲み線を表示</span><input type="checkbox" id="iconRingChk" ${pt.iconRingEnabled ? "checked" : ""} /></div>
-        <div class="path-preview" style="margin-top:0;">背景が画像などのとき、アイコンを見分けやすくするための細い線です。</div>
-        <div id="iconRingBrightnessWrap" style="${pt.iconRingEnabled ? "" : "display:none;"}">
-          <div class="field-label" style="margin-top:6px;">囲み線の明暗度（黒〜白）</div>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <input type="range" id="iconRingBrightnessSlider" min="0" max="100" step="1" value="${typeof pt.iconRingBrightness === "number" ? pt.iconRingBrightness : 55}" style="flex:1;" />
-            <span id="iconRingBrightnessValue" class="path-preview" style="margin:0;width:44px;text-align:right;">${typeof pt.iconRingBrightness === "number" ? pt.iconRingBrightness : 55}%</span>
-          </div>
+      <h3>ボタンの見た目${scope}</h3>
+      <div class="field-label">ボタンのアイコンの大きさ</div>
+      <div class="type-row" id="iconSizeRow"></div>
+      <div class="toggle-row"><span>ボタン間の距離を0にする</span><input type="checkbox" id="gapZeroChk" ${pt.gapZero === true ? "checked" : ""} /></div>
+      <div class="toggle-row${pt.gapZero === true ? " is-disabled" : ""}"><span>ボタンに影を付ける${pt.gapZero === true ? "（距離0の間は無効）" : ""}</span><input type="checkbox" id="showShadowsChk" ${pt.showShadows !== false ? "checked" : ""} ${pt.gapZero === true ? "disabled" : ""} /></div>
+      <div class="toggle-row"><span>アイコンの周りに囲み線を表示</span><input type="checkbox" id="iconRingChk" ${pt.iconRingEnabled ? "checked" : ""} /></div>
+      <div id="iconRingBrightnessWrap" style="${pt.iconRingEnabled ? "" : "display:none;"}">
+        <div class="field-label" style="margin-top:2px;">囲み線の明暗度（黒〜白）</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <input type="range" id="iconRingBrightnessSlider" min="0" max="100" step="1" value="${typeof pt.iconRingBrightness === "number" ? pt.iconRingBrightness : 55}" style="flex:1;" />
+          <span id="iconRingBrightnessValue" class="path-preview" style="margin:0;width:44px;text-align:right;">${typeof pt.iconRingBrightness === "number" ? pt.iconRingBrightness : 55}%</span>
         </div>
       </div>
+      <div class="field-label">アイコンボタン裏の枠の透明度</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <input type="range" id="panelOpacitySlider" min="0" max="100" step="1" value="${Math.round(currentPanelOpacity() * 100)}" style="flex:1;" />
+        <span id="panelOpacityValue" class="path-preview" style="margin:0;width:44px;text-align:right;">${Math.round(currentPanelOpacity() * 100)}%</span>
+      </div>
+      <div class="toggle-row" style="margin-bottom:0;"><span>ツールチップ（名前・ショートカット）を表示</span><input type="checkbox" id="showTooltipChk" ${pt.showTooltip !== false ? "checked" : ""} /></div>
     </div>
     <div class="settings-section"><h3>テーマ${settings.pageCount > 1 ? `（画面${WINDOW_PAGE_INDEX + 1}のみ）` : ""}</h3><div class="theme-row" id="themeRow"></div><div id="themeExtra"></div></div>
     <div class="settings-section"><h3>アクセントカラー${scope}</h3><div class="color-row" id="accentRow"></div></div>
@@ -3293,15 +3368,6 @@ function renderSettingsPanel() {
       <div class="path-preview" style="margin-top:8px;margin-bottom:0;">追加したすべてのボタン・操作・ショートカットキー・見た目の設定を、すべて設定前の初期状態に戻します。元に戻せません。</div>
     </div>
   `;
-
-  document.getElementById("behaviorSectionHeader").addEventListener("click", () => {
-    settingsSectionOpen.behavior = !settingsSectionOpen.behavior;
-    renderSettingsPanel();
-  });
-  document.getElementById("appearanceSectionHeader").addEventListener("click", () => {
-    settingsSectionOpen.appearance = !settingsSectionOpen.appearance;
-    renderSettingsPanel();
-  });
 
   const themeRow = document.getElementById("themeRow");
   Object.keys(THEME_LABELS).forEach((key) => {
@@ -3439,7 +3505,6 @@ function renderSettingsPanel() {
       await persistSettings();
       renderGrid();
       renderSettingsPanel();
-      peekBehindPanel();
     });
     iconSizeRow.appendChild(b);
   });
@@ -3521,9 +3586,19 @@ function renderSettingsPanel() {
     renderSettingsPanel();
   });
 
-  document.getElementById("showTitleChk").addEventListener("change", async (e) => { settings.showTitle = e.target.checked; await persistSettings(); renderGrid(); peekBehindPanel(); });
-  document.getElementById("showNameChk").addEventListener("change", async (e) => { currentPageTheme().showNameLabel = e.target.checked; await persistSettings(); renderGrid(); peekBehindPanel(); });
-  document.getElementById("showHotkeyChk").addEventListener("change", async (e) => { currentPageTheme().showHotkeyLabel = e.target.checked; await persistSettings(); renderGrid(); peekBehindPanel(); });
+  document.getElementById("showTitleChk").addEventListener("change", async (e) => { settings.showTitle = e.target.checked; await persistSettings(); renderGrid(); });
+  document.getElementById("gapZeroChk").addEventListener("change", async (e) => {
+    currentPageTheme().gapZero = e.target.checked;
+    currentPage = 0;
+    await persistSettings();
+    renderGrid();
+    renderSettingsPanel();
+  });
+  document.getElementById("showTooltipChk").addEventListener("change", async (e) => {
+    currentPageTheme().showTooltip = e.target.checked;
+    window.api.hideTooltip();
+    await persistSettings();
+  });
   document.getElementById("loginChk").addEventListener("change", async (e) => { settings.launchAtLogin = e.target.checked; await persistSettings(); });
   document.getElementById("showShadowsChk").addEventListener("change", async (e) => { currentPageTheme().showShadows = e.target.checked; await persistSettings(); });
   document.getElementById("iconRingChk").addEventListener("change", async (e) => {
@@ -3697,7 +3772,6 @@ function openNewPageModal() {
     closeModal();
     renderSettingsPanel();
     renderGrid();
-    peekBehindPanel();
     showToast(`画面${settings.pageCount}を追加しました`);
   });
   overlayEl.classList.add("show");

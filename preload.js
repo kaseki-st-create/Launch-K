@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("api", {
   exportBackup: (data, defaultName) => ipcRenderer.invoke("backup:export", data, defaultName),
   importBackup: () => ipcRenderer.invoke("backup:import"),
   resizeWindow: (size) => ipcRenderer.invoke("window:resize", size),
+  setMinContentSize: (size) => ipcRenderer.invoke("window:setMinContent", size),
   resetAll: () => ipcRenderer.invoke("app:reset"),
   setMediaAction: (action) => ipcRenderer.invoke("system:media", action),
   setMicAction: () => ipcRenderer.invoke("system:mic"),

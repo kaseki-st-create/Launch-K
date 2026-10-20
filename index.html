@@ -35,6 +35,7 @@
   html, body {
     margin: 0;
     height: 100%;
+    overflow: hidden; /* メイン画面はスクロールしない（行列は必ずウィンドウ内に収める） */
     background: linear-gradient(180deg, var(--bg1) 0%, var(--bg2) 100%);
     background-size: cover;
     background-position: center;
@@ -103,7 +104,13 @@
      重ならないようにするため。 */
   :root { --pager-btn-size: clamp(16px, 4.2vw, 36px); }
 
-  .header-pager { display: flex; align-items: center; gap: calc(var(--pager-btn-size) * 0.33); }
+  .header-pager { display: flex; align-items: center; gap: calc(var(--pager-btn-size) * 0.33); -webkit-app-region: no-drag; }
+  /* 右上の🔒と重なりそうなときだけ、JS（fitPager）が付けるクラス。「1 / 2」の文字を消して◀▶だけにする */
+  .header-pager.no-count .pager-count { display: none; }
+  /* 上の操作列の空き部分をドラッグ領域にする（OS標準のタイトルバーは縦長だと掴みにくいため）。
+     ボタン類はno-drag。#appより下の層に置くので、ボタンのクリックには影響しない。 */
+  #dragStrip { position: fixed; top: 0; left: 0; right: 0; height: calc(12px + var(--top-btn-size) + 4px); z-index: 0; -webkit-app-region: drag; }
+  body:has(.overlay.show) #dragStrip { display: none; } /* モーダル表示中は、背景クリックを邪魔しないよう無効 */
   .header-pager .pager-btn {
     width: calc(var(--pager-btn-size) * 1.9); height: var(--pager-btn-size);
     padding: 0; border-radius: 10px; flex: none;
@@ -133,6 +140,7 @@
     color: var(--text); font-size: calc(var(--top-btn-size) * 0.44); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+    -webkit-app-region: no-drag;
   }
 
   .lock-btn {
@@ -143,9 +151,16 @@
     display: flex; align-items: center; justify-content: center;
     box-shadow: 0 4px 10px rgba(0,0,0,0.25);
   }
+  .lock-btn { -webkit-app-region: no-drag; }
   .lock-btn.active {
     background: var(--accent); border-color: var(--accent); color: var(--accent-contrast);
   }
+
+  /* 「ボタン間の距離を0にする」がオンのとき：間隔0・枠なし・影なし（表示上の上書きのみ。設定値は変えない）。
+     押したときの沈み込みも、下のボタンに潜り込まないよう明るさの変化に置き換える。 */
+  body.gap-zero .grid { gap: 0; }
+  body.gap-zero .tile { border-color: transparent; box-shadow: none; }
+  body.gap-zero .tile:active { transform: none; box-shadow: none; filter: brightness(0.86); }
 
   /* ハンバーガーメニュー内「影を付ける」トグルがOFFのとき、主要ボタン群の影を消す */
   body.no-btn-shadow .tile,
@@ -162,17 +177,13 @@
   .grid {
     display: grid;
     gap: 7.5px 11px; /* 上下（行間）7.5px・左右（列間）11px。renderer.jsのGRID_ROW_GAP/GRID_GAPと必ず一致させること */
-    /* レイアウト計算で画面に収まる列数・行数・サイズを出しているため、
-       基本的にスクロールは発生しない想定。丸め誤差などで僅かに
-       あふれた場合の保険としてoverflow autoは残すが、
-       スクロールバー自体は視認性を下げるため見た目上は非表示にする。 */
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
+    /* レイアウト計算で画面に収まる列数・行数・サイズを出し、さらにウィンドウの
+       最小サイズをメイン側で制限しているため、スクロールも途切れも発生しない。 */
+    overflow: hidden; /* スクロールは廃止。ウィンドウの最小サイズと自動拡大で、行列が途切れないようにしている */
+    /* 行数固定で実際の行が少ないとき、行が縦に引き伸ばされてスカスカにならないよう上詰めにする */
+    align-content: start;
     padding-bottom: 0;
   }
-  .grid::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
   /* 名前表示・編集/削除ボタンの反応範囲を、クリックできるアイコン枠（.tile）と同じ角丸の形にそろえる */
   /* 行が縦に引き伸ばされても、反応範囲（名前表示・編集/削除ボタン）が見えている枠より下へ伸びないよう、上詰めにする */
@@ -197,7 +208,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0; /* 要素どうしの間隔は下の .tile-name / .tile-hotkey のmargin-topで個別に指定 */
+    gap: 0;
     cursor: pointer;
     padding: 6px;
     color: inherit;
@@ -234,19 +245,6 @@
     white-space: normal; word-break: break-word; overflow: hidden;
   }
 
-  .tile-name {
-    font-size: 12.5px; color: var(--text); opacity: 0.85; text-align: center;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
-  }
-  /* アイコンと名前の間：4px ／ 名前とショートカットキーの間：3.5px
-     （名前を非表示にしているときは、アイコンとショートカットキーの間を4pxにする） */
-  .tile-icon-wrap + .tile-name, .tile-icon-wrap + .tile-hotkey { margin-top: 4px; }
-  .tile-name + .tile-hotkey { margin-top: 3.5px; }
-  .tile-hotkey {
-    font-size: 9.5px; color: var(--text-muted); opacity: 0.7; text-align: center;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
-  }
-
   .tile-actions {
     position: absolute; top: 6px; right: 6px; display: none; gap: 6px; z-index: 20;
   }
@@ -266,11 +264,6 @@
   }
   /* ボタンが小さいとき：編集・削除を縦に並べて右端に寄せ、アイコン中央を覆わないようにする */
   .grid.compact-tiles .tile-actions { flex-direction: column; align-items: flex-end; top: 3px; right: 3px; gap: 2px; }
-  /* 削除ボタンだけは下限を14pxにする（上限27px・タイル比28%で自動的に変わる点は編集ボタンと同じ） */
-  .icon-btn.danger {
-    width: clamp(14px, calc(var(--tile-size, 96px) * 0.28), 27px);
-    height: clamp(14px, calc(var(--tile-size, 96px) * 0.28), 27px);
-  }
   /* 縦並び（ボタンが小さいとき）は、編集は最小16px〜最大24px、削除は常に編集より2px小さく（最小14px〜最大22px）する。
      タイルが約57px以上だと両方とも「タイル比28%」で同じ大きさになり、赤い削除ボタンのほうが
      大きく見えてしまっていたため、差を必ず付ける。 */
@@ -278,12 +271,8 @@
     width: clamp(16px, calc(var(--tile-size, 96px) * 0.28), 24px);
     height: clamp(16px, calc(var(--tile-size, 96px) * 0.28), 24px);
   }
-  .grid.compact-tiles .icon-btn.danger {
-    width: calc(clamp(16px, calc(var(--tile-size, 96px) * 0.28), 24px) - 2px);
-    height: calc(clamp(16px, calc(var(--tile-size, 96px) * 0.28), 24px) - 2px);
-  }
-  /* ウィンドウがPC画面の1/7以下のときは、削除ボタンを出さない（編集ボタンの位置はそのまま） */
-  .grid.small-window .icon-btn.danger { display: none; }
+  /* ウィンドウが小さい（作業領域の1/12以下）またはボタンが小さすぎるときは、編集・削除ボタンを出さない */
+  .grid.edit-locked .tile-wrap .tile-actions { display: none !important; }
   .icon-btn.danger { background: rgba(255,107,94,0.85); border-color: rgba(255,107,94,0.9); color: #1A1A1A; }
 
   .add-tile {
@@ -438,8 +427,13 @@
   .icon-group-caret { font-size: 11px; transition: transform 120ms ease; display: inline-block; }
   .icon-group-caret.open { transform: rotate(180deg); }
 
-  .settings-section { margin-bottom: 18px; }
-  .settings-section h3 { font-size: 12px; letter-spacing: 0.5px; color: var(--text-muted); margin: 0 0 10px; }
+  .settings-section { margin-bottom: 10px; }
+  .settings-section h3 { font-size: 12px; letter-spacing: 0.5px; color: var(--text-muted); margin: 0 0 6px; }
+  #settingsBody .type-row { margin-bottom: 8px; }
+  #settingsBody .page-tabs { margin-bottom: 8px; }
+  .dim-pair { display: flex; gap: 12px; }
+  .dim-pair > div { flex: 1; min-width: 0; }
+  .toggle-row.is-disabled { opacity: 0.5; }
   .theme-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
   .theme-swatch {
     width: 32px; height: 32px; border-radius: 50%; cursor: pointer; border: none; padding: 0;
@@ -450,7 +444,7 @@
   .theme-swatch.active {
     box-shadow: 0 0 0 1px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.3), 0 0 0 3px var(--accent);
   }
-  .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 13px; }
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 13px; gap: 8px; }
   .link-row {
     display: flex; align-items: center; gap: 8px; padding: 10px 4px; cursor: pointer;
     color: var(--text-muted); font-size: 13px; border-top: 1px solid var(--border);
@@ -467,9 +461,6 @@
     flex: 0 0 auto; display: flex; justify-content: flex-end;
     padding: 12px 22px; border-top: 1px solid var(--border);
   }
-  .modal-panel { transition: opacity 160ms ease; }
-  #settingsOverlay.peeking { background: rgba(10,11,14,0.06); transition: background 160ms ease; }
-  #settingsOverlay.peeking .modal-panel { opacity: 0.1; pointer-events: none; }
 
   .page-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
   .page-tab {
@@ -482,6 +473,7 @@
 </style>
 </head>
 <body>
+  <div id="dragStrip"></div>
   <button class="lock-btn" id="lockBtn" title="常に最前面に表示">🔓</button>
   <button class="hamburger-btn" id="hamburgerBtn">☰</button>
 

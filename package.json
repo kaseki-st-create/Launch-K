@@ -1,7 +1,7 @@
 {
   "name": "launch-k",
   "productName": "Launch-K",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "個人用ランチャーデスクトップアプリ",
   "main": "main.js",
   "scripts": {
@@ -9,12 +9,12 @@
     "build": "set CSC_IDENTITY_AUTO_DISCOVERY=false&&electron-builder"
   },
   "devDependencies": {
-    "electron": "^44.5.0",
+    "electron": "^44.9.1",
     "electron-builder": "^26.17.0"
   },
   "dependencies": {
     "electron-updater": "^6.8.10",
-    "koffi": "2.9.0"
+    "koffi": "3.3.3"
   },
   "build": {
     "appId": "com.kaseki.launchk",
@@ -42,8 +42,8 @@
     }
   },
   "allowScripts": {
-    "electron@44.5.0": true,
-    "koffi@2.9.0": true,
+    "electron@44.9.1": true,
+    "koffi@3.3.3": true,
     "electron-winstaller@5.4.0": true
   },
   "author": "Launch-K"

@@ -460,13 +460,14 @@ function applySettings(settings) {
   } catch (e) {}
 }
 
-// 起動時のウィンドウの大きさ。PC画面（作業領域）の約1.2割の広さ（1/7以下）にして、削除ボタンが出ない小さめの状態で表示する。
+// 起動時のウィンドウの大きさ（内容領域）。PC画面（作業領域）の9%の広さ（1/7以下・1/12以上）にして、
+// 削除ボタンは出ないが編集はできる小さめの状態で表示する。
 function computeInitialWindowSize() {
   const BASE_W = 960, BASE_H = 680;
   try {
     const wa = screen.getPrimaryDisplay().workArea;
-    const k = Math.min(1, Math.sqrt((wa.width * wa.height * 0.12) / (BASE_W * BASE_H)));
-    return { width: Math.max(420, Math.round(BASE_W * k)), height: Math.max(340, Math.round(BASE_H * k)) };
+    const k = Math.min(1, Math.sqrt((wa.width * wa.height * 0.09) / (BASE_W * BASE_H)));
+    return { width: Math.max(360, Math.round(BASE_W * k)), height: Math.max(300, Math.round(BASE_H * k)) };
   } catch (e) {
     return { width: BASE_W, height: BASE_H };
   }
@@ -477,6 +478,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: initialSize.width,
     height: initialSize.height,
+    useContentSize: true, // width/height は内容領域の大きさ（枠は含めない）
     backgroundColor: "#14161B",
     autoHideMenuBar: true,
     icon: ICON_PATH,
@@ -544,6 +546,7 @@ function openPageWindow(pageIndex) {
   const win = new BrowserWindow({
     width: pageInitialSize.width,
     height: pageInitialSize.height,
+    useContentSize: true,
     backgroundColor: "#14161B",
     autoHideMenuBar: true,
     icon: ICON_PATH,
@@ -806,9 +809,45 @@ ipcMain.handle("window:resize", (event, { width, height }) => {
   // （別画面で適用したのにメインウィンドウが変わってしまわないように）。
   const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
   if (!win || win.isDestroyed()) return false;
-  const w = Math.max(360, Math.round(width));
-  const h = Math.max(300, Math.round(height));
+  if (win.isMaximized() || win.isFullScreen()) return false; // 最大化中は大きさを変えない
+  const w = Math.max(150, Math.round(width));
+  const h = Math.max(120, Math.round(height));
   win.setContentSize(w, h);
+  fitWindowToWorkArea(win);
+  return true;
+});
+
+// ウィンドウが作業領域（モニター）からはみ出さないように、大きさと位置を収める。
+function fitWindowToWorkArea(win) {
+  try {
+    if (win.isMinimized() || win.isMaximized() || win.isFullScreen()) return;
+    const b = win.getBounds();
+    const wa = screen.getDisplayMatching(b).workArea;
+    const w = Math.min(b.width, wa.width), h = Math.min(b.height, wa.height);
+    const x = Math.min(Math.max(b.x, wa.x), wa.x + wa.width - w);
+    const y = Math.min(Math.max(b.y, wa.y), wa.y + wa.height - h);
+    if (x !== b.x || y !== b.y || w !== b.width || h !== b.height) win.setBounds({ x, y, width: w, height: h });
+  } catch (e) {}
+}
+
+// ---- 行列が途切れず収まる最小サイズ（内容領域）を設定する ----
+// これ未満には縮められない。いまのウィンドウが小さければ、必要な大きさまで自動で広げる。
+ipcMain.handle("window:setMinContent", (event, size) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || win.isMinimized() || win.isMaximized() || win.isFullScreen()) return false;
+  const reqW = Math.max(1, Math.ceil(Number(size && size.width) || 0));
+  const reqH = Math.max(1, Math.ceil(Number(size && size.height) || 0));
+  const [ow, oh] = win.getSize();
+  const [cw, ch] = win.getContentSize();
+  const exW = ow - cw, exH = oh - ch; // 枠の分（useContentSizeでも、最小サイズは外枠で指定するため）
+  const wa = screen.getDisplayMatching(win.getBounds()).workArea;
+  const mw = Math.min(reqW, wa.width - exW);
+  const mh = Math.min(reqH, wa.height - exH);
+  win.setMinimumSize(mw + exW, mh + exH);
+  if (cw < mw || ch < mh) {
+    win.setContentSize(Math.max(cw, mw), Math.max(ch, mh));
+    fitWindowToWorkArea(win);
+  }
   return true;
 });
 
