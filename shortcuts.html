@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
+<title>ショートカットの管理</title>
+<style>
+  :root {
+    --bg: #17181c;
+    --panel: #1f2126;
+    --panel-alt: #26282e;
+    --border: #33353c;
+    --text: #f2f2f4;
+    --text-muted: #9b9ea6;
+    --accent: #6c8bff;
+    --accent-contrast: #10121a;
+    --danger: #ff6b5e;
+    --warn: #ffb84d;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+    overflow: hidden;
+  }
+  .frame { display: flex; flex-direction: column; height: 100%; border: 1px solid var(--border); overflow: hidden; }
+  .title-bar {
+    -webkit-app-region: drag;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 8px 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .title-bar .label { font-size: 12px; color: var(--text-muted); letter-spacing: 1px; }
+  .title-bar .btns { display: flex; gap: 6px; -webkit-app-region: no-drag; }
+  .icon-btn {
+    width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--border);
+    background: var(--panel-alt); color: var(--text-muted); font-size: 13px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+  }
+  .icon-btn:hover { color: var(--text); }
+  .toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .tabs { display: flex; gap: 6px; }
+  .tab {
+    padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-alt); color: var(--text-muted); font-size: 13px; cursor: pointer;
+  }
+  .tab.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); font-weight: 600; }
+  .opt { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer; user-select: none; }
+  .opt input { margin: 0; }
+  .summary { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+  .content { flex: 1; overflow-y: auto; padding: 10px 12px 16px; }
+  .section { margin-bottom: 14px; }
+  .section h3 {
+    margin: 0 0 6px; font-size: 13px; font-weight: 700; color: var(--text);
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .section h3 .count { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+  .row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 7px 10px; margin-bottom: 4px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .row .name { font-size: 13px; min-width: 120px; flex: 1; word-break: break-all; }
+  .row .keys { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }
+  .use { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .badge {
+    font-size: 10px; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-alt); color: var(--text-muted); white-space: nowrap;
+  }
+  .badge.launch { color: #8fb0ff; border-color: #3a4a7a; }
+  .badge.send { color: #7fd6a0; border-color: #2f5a44; }
+  .badge.warn { color: var(--warn); border-color: #6b5226; }
+  .key { font-family: Consolas, "SFMono-Regular", Menlo, monospace; font-size: 12px; color: var(--text); white-space: nowrap; }
+  .none { font-size: 12px; color: var(--text-muted); }
+  .keyhead {
+    font-family: Consolas, "SFMono-Regular", Menlo, monospace; font-size: 13px; font-weight: 700;
+    margin: 0 0 6px;
+  }
+  .where { font-size: 13px; flex: 1; word-break: break-all; }
+  .empty { font-size: 13px; color: var(--text-muted); padding: 24px 4px; text-align: center; }
+  .note { font-size: 11px; color: var(--text-muted); margin-top: 10px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="title-bar">
+    <div class="label">ショートカットの管理</div>
+    <div class="btns">
+      <button class="icon-btn" id="refreshBtn" type="button" title="最新の状態に更新">↻</button>
+      <button class="icon-btn" id="closeBtn" type="button" title="閉じる">✕</button>
+    </div>
+  </div>
+  <div class="toolbar">
+    <div class="tabs">
+      <button class="tab active" id="tabScreen" type="button">画面順</button>
+      <button class="tab" id="tabKey" type="button">キー順</button>
+    </div>
+    <label class="opt" id="showAllWrap"><input type="checkbox" id="showAllChk" />未設定のボタンも表示</label>
+    <div class="summary" id="summary"></div>
+  </div>
+  <div class="content" id="content"></div>
+</div>
+<script>
+(function () {
+  "use strict";
+  var data = { tiles: [], pageCount: 1 };
+  var mode = "screen"; // "screen" | "key"
+  var contentEl = document.getElementById("content");
+  var summaryEl = document.getElementById("summary");
+  var showAllChk = document.getElementById("showAllChk");
+
+  function el(tag, className, text) {
+    var e = document.createElement(tag);
+    if (className) e.className = className;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+  function norm(c) { return String(c || "").toLowerCase(); }
+  function formatKey(hotkey) { return String(hotkey || "").replace(/Control/g, "Ctrl"); }
+  function lastKeyChar(hotkey) {
+    var parts = String(hotkey || "").split("+");
+    return (parts[parts.length - 1] || "").toUpperCase();
+  }
+  // 数字（0〜9）→英字（A〜Z）の順。それ以外（想定外）は最後。
+  function keyRank(ch) {
+    if (/^[0-9]$/.test(ch)) return [0, ch];
+    if (/^[A-Z]$/.test(ch)) return [1, ch];
+    return [2, ch];
+  }
+  function compareKeys(a, b) {
+    var ra = keyRank(lastKeyChar(a)), rb = keyRank(lastKeyChar(b));
+    if (ra[0] !== rb[0]) return ra[0] - rb[0];
+    if (ra[1] < rb[1]) return -1;
+    if (ra[1] > rb[1]) return 1;
+    return 0;
+  }
+  function pageOf(tile) {
+    var n = Number(tile && tile.pageIndex);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  }
+
+  // ボタン1つが持つショートカット（起動用・キー送信）を取り出す（renderer.jsのhotkeyUsesOfTileと同じ考え方）
+  function usesOfTile(tile) {
+    var uses = [];
+    if (!tile || typeof tile !== "object") return uses;
+    if (tile.hotkey) uses.push({ kind: "launch", combo: tile.hotkey, label: "起動用" });
+    if (tile.type === "discord" && tile.sendHotkey) uses.push({ kind: "send", combo: tile.sendHotkey, label: "キー送信" });
+    if (tile.type === "multi" && Array.isArray(tile.subActions)) {
+      tile.subActions.forEach(function (s, i) {
+        if (s && s.type === "discord" && s.sendHotkey) {
+          uses.push({ kind: "send", combo: s.sendHotkey, label: "マルチ操作" + (i + 1) + "番目のキー送信" });
+        }
+      });
+    }
+    return uses;
+  }
+
+  // 実際にOSへ登録される起動用ショートカットかどうか（renderer.jsのsyncHotkeysと同じ判定）。
+  // 送信用と同じキー、または先に登録済みの起動用と同じキーの起動用は、無効になる。
+  function markDisabled(tiles) {
+    var sendSet = {};
+    tiles.forEach(function (t) {
+      usesOfTile(t).forEach(function (u) { if (u.kind === "send") sendSet[norm(u.combo)] = true; });
+    });
+    var seen = {};
+    tiles.forEach(function (t) {
+      if (!t || typeof t !== "object" || !t.hotkey) return;
+      var k = norm(t.hotkey);
+      t.__launchDisabled = !!(sendSet[k] || seen[k]);
+      if (!t.__launchDisabled) seen[k] = true;
+    });
+  }
+
+  function useRow(u, disabled) {
+    var d = el("div", "use");
+    d.appendChild(el("span", "badge " + u.kind, u.label));
+    d.appendChild(el("span", "key", formatKey(u.combo)));
+    if (u.kind === "launch" && disabled) d.appendChild(el("span", "badge warn", "⚠ 重複のため無効"));
+    return d;
+  }
+
+  function renderScreenView() {
+    var tiles = data.tiles;
+    var maxPage = data.pageCount - 1;
+    tiles.forEach(function (t) { if (t && typeof t === "object") maxPage = Math.max(maxPage, pageOf(t)); });
+    var showAll = showAllChk.checked;
+    var any = false;
+    for (var p = 0; p <= maxPage; p++) {
+      var list = tiles.filter(function (t) { return t && typeof t === "object" && pageOf(t) === p; });
+      var withKeys = list.filter(function (t) { return usesOfTile(t).length > 0; });
+      var shown = showAll ? list : withKeys;
+      if (!shown.length && !(showAll && p < data.pageCount)) continue;
+      any = true;
+      var sec = el("div", "section");
+      var h = el("h3", null, "画面" + (p + 1));
+      h.appendChild(el("span", "count", "ショートカット登録 " + withKeys.length + " 件 / ボタン " + list.length + " 個"));
+      sec.appendChild(h);
+      if (!shown.length) sec.appendChild(el("div", "none", "（ボタンがありません）"));
+      shown.forEach(function (t) {
+        var row = el("div", "row");
+        row.appendChild(el("div", "name", t.name || "無題"));
+        var keys = el("div", "keys");
+        var uses = usesOfTile(t);
+        if (!uses.length) keys.appendChild(el("span", "none", "未設定"));
+        uses.forEach(function (u) { keys.appendChild(useRow(u, !!t.__launchDisabled)); });
+        row.appendChild(keys);
+        sec.appendChild(row);
+      });
+      contentEl.appendChild(sec);
+    }
+    if (!any) contentEl.appendChild(el("div", "empty", "登録されているショートカットはありません"));
+  }
+
+  function renderKeyView() {
+    var groups = {};
+    var order = [];
+    data.tiles.forEach(function (t) {
+      usesOfTile(t).forEach(function (u) {
+        var k = norm(u.combo);
+        if (!groups[k]) { groups[k] = { combo: u.combo, items: [] }; order.push(k); }
+        groups[k].items.push({ tile: t, use: u });
+      });
+    });
+    order.sort(function (a, b) { return compareKeys(groups[a].combo, groups[b].combo); });
+    if (!order.length) {
+      contentEl.appendChild(el("div", "empty", "登録されているショートカットはありません"));
+      return;
+    }
+    order.forEach(function (k) {
+      var g = groups[k];
+      var sec = el("div", "section");
+      sec.appendChild(el("div", "keyhead", formatKey(g.combo)));
+      // 起動用が含まれて2件以上なら重複（本来は設定できない状態）。送信用だけの複数は問題なし
+      var hasLaunch = g.items.some(function (it) { return it.use.kind === "launch"; });
+      var conflict = hasLaunch && g.items.length > 1;
+      g.items.forEach(function (it) {
+        var row = el("div", "row");
+        row.appendChild(el("div", "where", "画面" + (pageOf(it.tile) + 1) + "「" + (it.tile.name || "無題") + "」"));
+        row.appendChild(el("span", "badge " + it.use.kind, it.use.label));
+        if (conflict) row.appendChild(el("span", "badge warn", "⚠ 重複"));
+        sec.appendChild(row);
+      });
+      contentEl.appendChild(sec);
+    });
+  }
+
+  function render() {
+    while (contentEl.firstChild) contentEl.removeChild(contentEl.firstChild);
+    markDisabled(data.tiles);
+    var launch = 0, send = 0, disabled = 0;
+    data.tiles.forEach(function (t) {
+      usesOfTile(t).forEach(function (u) { if (u.kind === "launch") launch++; else send++; });
+      if (t && t.__launchDisabled) disabled++;
+    });
+    summaryEl.textContent = "起動用 " + launch + " 件" + (disabled ? "（うち重複で無効 " + disabled + " 件）" : "") + " / キー送信 " + send + " 件";
+    document.getElementById("showAllWrap").style.display = mode === "screen" ? "" : "none";
+    if (mode === "screen") renderScreenView();
+    else renderKeyView();
+    if (mode === "screen") {
+      contentEl.appendChild(el("div", "note", "起動用：どこからでもそのキーを押すとボタンが動くショートカット。キー送信：ボタンを押すと、Discordなど他のアプリへ送るキー。この画面は見るだけで、変更はボタンの編集画面で行います。"));
+    }
+  }
+
+  function load() {
+    if (!window.shortcutsApi) {
+      contentEl.textContent = "読み込みに失敗しました";
+      return;
+    }
+    window.shortcutsApi.getData().then(function (res) {
+      var tiles = res && Array.isArray(res.tiles) ? res.tiles : [];
+      data = { tiles: tiles, pageCount: Math.max(1, Number(res && res.pageCount) || 1) };
+      render();
+    }).catch(function () {
+      while (contentEl.firstChild) contentEl.removeChild(contentEl.firstChild);
+      contentEl.appendChild(el("div", "empty", "一覧を読み込めませんでした。右上の ↻ でもう一度お試しください。"));
+    });
+  }
+
+  function setMode(m) {
+    mode = m;
+    document.getElementById("tabScreen").classList.toggle("active", m === "screen");
+    document.getElementById("tabKey").classList.toggle("active", m === "key");
+    render();
+  }
+
+  document.getElementById("tabScreen").addEventListener("click", function () { setMode("screen"); });
+  document.getElementById("tabKey").addEventListener("click", function () { setMode("key"); });
+  showAllChk.addEventListener("change", render);
+  document.getElementById("refreshBtn").addEventListener("click", load);
+  document.getElementById("closeBtn").addEventListener("click", function () { if (window.shortcutsApi) window.shortcutsApi.close(); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && window.shortcutsApi) window.shortcutsApi.close();
+  });
+  window.addEventListener("focus", load); // 開いたまま別の画面で変更した場合も、戻ってきたときに最新にする
+  load();
+})();
+</script>
+</body>
+</html>

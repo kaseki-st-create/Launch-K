@@ -120,7 +120,6 @@ const TYPE_META = {
   zoom: { label: "ズーム" },
   timer: { label: "タイマー" },
   discord: { label: "Discord" },
-  obs: { label: "OBS" },
   shortcutKeys: { label: "ショートカット" },
   screenshotFull: { label: "全画面スクショ" },
   multi: { label: "マルチ操作" },
@@ -190,13 +189,6 @@ const MEDIA_ACTIONS = {
   next: { label: "次の曲", glyph: "⏭" },
   prev: { label: "前の曲", glyph: "⏮" },
 };
-const OBS_ACTIONS = {
-  mute: { label: "ミュート切替", glyph: "🎙" },
-  recordStart: { label: "録画開始", glyph: "⏺" },
-  recordStop: { label: "録画停止", glyph: "⏹" },
-  streamStart: { label: "配信開始", glyph: "📡" },
-  streamStop: { label: "配信停止", glyph: "🛑" },
-};
 const WINDOW_ACTIONS = {
   left: { label: "左半分にスナップ", glyph: "◧" },
   right: { label: "右半分にスナップ", glyph: "◨" },
@@ -231,6 +223,9 @@ const SHORTCUT_ACTIONS = {
   selectAll: { label: "すべて選択", glyph: "Ctrl+A" },
   save: { label: "保存", glyph: "Ctrl+S" },
   find: { label: "検索", glyph: "Ctrl+F" },
+  // ブラウザのタブ操作。前面のウィンドウがブラウザのときだけ送られる（main.js側で確認する）
+  closeTab: { label: "タブを閉じる", glyph: "Ctrl+W" },
+  reopenTab: { label: "閉じたタブを復元", glyph: "Ctrl+Shift+T" },
 };
 
 // ---------- CSSアイコン（自分で描いたSVGアイコン集） ----------
@@ -269,6 +264,8 @@ const CSS_ICONS = {
   pause:       { label: "一時停止",     svg: svgWrap(`<rect x="6" y="4" width="4" height="16" fill="currentColor" stroke="none"/><rect x="14" y="4" width="4" height="16" fill="currentColor" stroke="none"/>`) },
   "skip-next": { label: "次へ",         svg: svgWrap(`<path d="M5 5v14l10-7z" fill="currentColor" stroke="none"/><rect x="17" y="5" width="2.5" height="14" fill="currentColor" stroke="none"/>`) },
   "skip-prev": { label: "前へ",         svg: svgWrap(`<path d="M19 5v14L9 12z" fill="currentColor" stroke="none"/><rect x="4.5" y="5" width="2.5" height="14" fill="currentColor" stroke="none"/>`) },
+  "tab-close":   { label: "タブを閉じる",     svg: svgWrap(`<rect x="3" y="3.5" width="18" height="17" rx="2"/><path d="M3 7.5h18"/><path d="M9.5 11.5l5 5M14.5 11.5l-5 5"/>`) },
+  "tab-restore": { label: "閉じたタブを復元", svg: svgWrap(`<rect x="3" y="3.5" width="18" height="17" rx="2"/><path d="M3 7.5h18"/><path d="M12.6 10.6A4.4 4.4 0 1 1 8.4 13.6"/><path d="M7.8 10.9v2.9h2.9"/>`) },
   "rotate-left":  { label: "回転（左）", svg: svgWrap(`<path d="M9 3.5A8.5 8.5 0 1 1 3.5 9"/><path d="M3 3v5.5h5.5"/>`) },
   "rotate-right": { label: "回転（右）", svg: svgWrap(`<path d="M15 3.5A8.5 8.5 0 1 0 20.5 9"/><path d="M21 3v5.5h-5.5"/>`) },
   camera:      { label: "カメラ",       svg: svgWrap(`<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7l1.4-2.2h5.2L16 7"/><circle cx="12" cy="13.5" r="3.4"/>`) },
@@ -315,7 +312,7 @@ const CSS_ICONS = {
 const CSS_ICON_TOGGLE_KEYS = Object.keys(CSS_ICONS).filter((k) => CSS_ICONS[k].toggle);
 const CSS_ICON_GROUPS = [
   { title: "オン/オフに対応（状態に応じて自動で切り替わります）", keys: CSS_ICON_TOGGLE_KEYS },
-  { title: "システム・操作", keys: ["power", "restart", "sleep", "sun", "moon", "volume-up", "volume-down", "zoom-in", "zoom-out", "snap-left", "snap-right", "snap-top-left", "snap-top-right", "snap-bottom-left", "snap-bottom-right", "play", "pause", "skip-next", "skip-prev", "gear", "bell", "calendar", "link", "app", "qr", "layers", "screens"] },
+  { title: "システム・操作", keys: ["power", "restart", "sleep", "sun", "moon", "volume-up", "volume-down", "zoom-in", "zoom-out", "snap-left", "snap-right", "snap-top-left", "snap-top-right", "snap-bottom-left", "snap-bottom-right", "play", "pause", "skip-next", "skip-prev", "gear", "bell", "calendar", "link", "app", "qr", "layers", "screens", "tab-close", "tab-restore"] },
   { title: "ファイル・書類", keys: ["file", "folder", "clipboard", "book", "wallet", "money"] },
   { title: "デバイス", keys: ["pc", "smartphone", "usb", "clock", "telephone", "tv", "headphones", "earphones", "speakers2", "car"] },
   { title: "音楽", keys: ["music", "piano", "guitar", "drum"] },
@@ -415,10 +412,8 @@ function defaultCssIconFor(t) {
       return t.action === "out" ? "zoom-out" : "zoom-in";
     case "discord":
       return "chatRound";
-    case "obs":
-      return t.action === "mute" ? "mic" : "tv";
     case "shortcutKeys":
-      return { copy: "layers", cut: "eraser", paste: "clipboard", undo: "rotate-left", redo: "rotate-right", selectAll: "check", save: "file", find: "zoom-in" }[t.action] || "clipboard";
+      return { copy: "layers", cut: "eraser", paste: "clipboard", undo: "rotate-left", redo: "rotate-right", selectAll: "check", save: "file", find: "zoom-in", closeTab: "tab-close", reopenTab: "tab-restore" }[t.action] || "clipboard";
     case "screenshotFull":
       return "camera";
     case "multi":
@@ -501,10 +496,11 @@ const PAGE_SETTING_KEYS = [
   "themeMode", "customColor", "bgImagePath", "bgImageFit", "bgImageBrightness", "panelColorOverride", "iconSize",
   "accent", "gridColumns", "gridRows", "showNameLabel", "showHotkeyLabel", "showShadows", "panelOpacity",
   "iconRingEnabled", "iconRingBrightness", "gapZero", "showTooltip",
+  "showTitle", "cssFrameEnabled", "cssFrameBrightness", "cssFrameWidth",
 ];
 // 以前のバージョンでは全画面共通（settings直下）だったキー。
 // 画面別の値がまだ無いときだけ、その共通値を引き継ぐ（＝更新しても見た目が変わらない）。
-const LEGACY_GLOBAL_PAGE_KEYS = ["accent", "gridColumns", "gridRows", "showNameLabel", "showHotkeyLabel", "showShadows", "panelOpacity"];
+const LEGACY_GLOBAL_PAGE_KEYS = ["accent", "gridColumns", "gridRows", "showNameLabel", "showHotkeyLabel", "showShadows", "panelOpacity", "showTitle"];
 const PANEL_OPACITY_DEFAULT = 0.7;
 // 画面ごとの設定の初期値（「初期設定で新しい画面を作る」ときにも使う）。
 function pageSettingDefaults() {
@@ -544,9 +540,14 @@ function sanitizePageSetting(key, value, fallback) {
     case "iconRingEnabled":
     case "gapZero":
     case "showTooltip":
+    case "showTitle":
+    case "cssFrameEnabled":
       return typeof value === "boolean" ? value : fallback;
     case "iconRingBrightness":
+    case "cssFrameBrightness":
       return typeof value === "number" && value >= 0 && value <= 100 ? Math.round(value) : fallback;
+    case "cssFrameWidth":
+      return typeof value === "number" && value >= 1 && value <= 3 ? Math.round(value) : fallback;
     default:
       return value;
   }
@@ -597,6 +598,9 @@ const DEFAULT_SETTINGS = {
   iconSize: "large",
   iconRingEnabled: false,
   iconRingBrightness: 55,
+  cssFrameEnabled: false, // CSSアイコン（既定・CSS）の枠を付けるか（画面ごと）
+  cssFrameBrightness: 85, // 枠の明暗度（0=黒〜100=白）
+  cssFrameWidth: 2, // 枠の太さ（1〜3px）
   gapZero: false, // ボタン間の距離を0にする（画面ごと）
   showTooltip: true, // ボタンにマウスを乗せたときのツールチップ表示（画面ごと）
   accent: "#FF6B5E",
@@ -612,9 +616,6 @@ const DEFAULT_SETTINGS = {
   pageLocks: [], // 画面（ページ）ごとの「常に最前面」。画面番号順のtrue/false
   launchAtLogin: false,
   pageCount: 1,
-  obsHost: "127.0.0.1",
-  obsPort: 4455,
-  obsPassword: "",
 };
 
 const BASE_TILE = 126; // 自動モードでの基準アイコンサイズ
@@ -853,7 +854,7 @@ function currentPanelOpacity() {
 // ハンバーガーメニュー最上部の「タイトルを表示」設定を反映する。
 // 非表示のときは、サブページ切替（◀ 1 / 2 ▶）がタイトルの位置に来て、2段にならないようにする。
 function applyTitleVisibility() {
-  const hidden = settings.showTitle !== true;
+  const hidden = currentPageTheme().showTitle !== true; // 画面ごとの設定（旧バージョンの共通設定は初回に引き継ぐ）
   const titleWrap = document.getElementById("appTitle") && document.getElementById("appTitle").parentElement;
   if (titleWrap) titleWrap.style.display = hidden ? "none" : "";
   const header = document.querySelector(".header");
@@ -931,6 +932,12 @@ function applyTheme() {
   } else {
     root.setProperty("--icon-ring-color", "transparent");
   }
+  // CSSアイコン（アイコンの種類が「既定」「CSS」のもの）専用の枠。塗りつぶしの有無に関わらず同じ枠を付ける。
+  // ハンバーガーメニュー→ボタンの見た目で、オン/オフ・明暗度（黒〜白）・太さを設定できる。
+  document.body.classList.toggle("css-frame-on", pt.cssFrameEnabled === true);
+  const frameV = Math.round(((typeof pt.cssFrameBrightness === "number" ? pt.cssFrameBrightness : 85) / 100) * 255);
+  root.setProperty("--css-frame-color", `rgb(${frameV}, ${frameV}, ${frameV})`);
+  root.setProperty("--css-frame-width", `${typeof pt.cssFrameWidth === "number" ? pt.cssFrameWidth : 2}px`);
   // サブページ切替（◀ 1 / 2 ▶）の文字縁取り色。パネルが明るいテーマでは黒縁が汚く見えるため、
   // パネルの明るさに応じて縁取りを黒/白に切り替える。
   root.setProperty("--pager-outline-rgb", luminanceOfAny(preset.panel) > 0.5 ? "255, 255, 255" : "0, 0, 0");
@@ -1005,7 +1012,7 @@ function syncWindowMinSize() {
     const gridH = Math.ceil(gridTop + 12 + rows * MIN_TILE + (rows - 1) * rowGap) + 1;
     // 上の操作列（◀▶・🔒・☰）が重ならない最小幅
     let topW = lastTotalPages > 1 ? Math.ceil(12 + PAGER_MIN_WIDTH + 74 + 6) : 96;
-    if (settings.showTitle === true) {
+    if (currentPageTheme().showTitle === true) {
       const titleEl = document.getElementById("appTitle");
       if (titleEl) topW = Math.max(topW, Math.ceil(24 + 84 + titleEl.scrollWidth));
     }
@@ -1023,29 +1030,195 @@ function isEditLocked(tileSize) {
 
 async function persistTiles() {
   await window.api.saveTiles(tiles);
-  syncHotkeys();
+  syncHotkeys(true);
   scheduleMuteRefresh(300); // ミュート系のボタンを追加・変更したときに、実際の状態をすぐ反映する
 }
 async function persistSettings() {
   settings = await window.api.saveSettings(settings);
   applyTheme();
 }
-function syncHotkeys() {
-  const list = tiles.filter((t) => t.hotkey).map((t) => ({ id: t.id, accelerator: t.hotkey }));
-  window.api.registerHotkeys(list).then((failed) => {
-    if (failed && failed.length) showToast(`一部のショートカットを登録できませんでした（${failed.length}件・他アプリと重複の可能性）`);
+// ---------- ショートカットキーの重複チェック ----------
+// 起動用：ボタンに登録して、どこからでも押せるキー。OSに登録するので、1か所にしか使えない。
+// 送信用：「Discord等へキー送信」（ボタン単体・マルチ操作の中の動作）で、他のアプリへ送るキー。OSには登録しない。
+//   禁止：起動用 × 起動用 ／ 起動用 × 送信用（送ったキーをLaunch-K自身が受け取ってしまうため）
+//   許可：送信用 × 送信用（同じ操作のボタンを別の画面にも置く、マルチ操作で同じキーを2回送る、など）
+function hotkeyNorm(combo) {
+  return String(combo || "").toLowerCase();
+}
+// ボタン1つが使っているキーの一覧。slot はそのボタンの中で「どの欄か」を区別する名前
+// （"launch"＝起動用、"send"＝ボタン単体の送信キー、"sub:N"＝マルチ操作のN+1番目の動作の送信キー）。
+function hotkeyUsesOfTile(tile) {
+  const uses = [];
+  if (!tile || typeof tile !== "object") return uses;
+  if (tile.hotkey) uses.push({ slot: "launch", kind: "launch", combo: tile.hotkey });
+  if (tile.type === "discord" && tile.sendHotkey) uses.push({ slot: "send", kind: "send", combo: tile.sendHotkey });
+  if (tile.type === "multi" && Array.isArray(tile.subActions)) {
+    tile.subActions.forEach((sub, i) => {
+      if (sub && sub.type === "discord" && sub.sendHotkey) {
+        uses.push({ slot: `sub:${i}`, kind: "send", combo: sub.sendHotkey, subIndex: i });
+      }
+    });
+  }
+  return uses;
+}
+function hotkeyUseLabel(use) {
+  if (use.kind === "launch") return "起動用ショートカット";
+  return use.subIndex !== undefined ? `マルチ操作（${use.subIndex + 1}番目の動作）のキー送信` : "キー送信";
+}
+function hotkeyOwnerLabel(tile) {
+  return `画面${(Number(tile.pageIndex) || 0) + 1}の「${tile.name || "無題"}」`;
+}
+// 設定しようとしているキー（combo／種類 kind）が、すでに使われていないか調べる。
+// editingTile は編集中のボタン（保存前の作業用コピー）、editingSlot はいま設定中の欄。
+// 重複していれば { text: 画面に出す文章 } を返し、問題なければ null。
+function findHotkeyClash(combo, kind, editingTile, editingSlot) {
+  const key = hotkeyNorm(combo);
+  if (!key) return null;
+  const clashes = (use) => hotkeyNorm(use.combo) === key && (kind === "launch" || use.kind === "launch");
+  const rule = "起動用ショートカットとキー送信は、同じキーにできません。";
+  // 同じボタンの中の他の欄
+  for (const use of hotkeyUsesOfTile(editingTile)) {
+    if (use.slot === editingSlot) continue;
+    if (clashes(use)) return { text: `このボタンの${hotkeyUseLabel(use)}と同じキーです。${rule}` };
+  }
+  // 他のボタン（全ての画面）
+  for (const other of tiles) {
+    if (!other || other.id === editingTile.id) continue;
+    for (const use of hotkeyUsesOfTile(other)) {
+      if (clashes(use)) {
+        const cross = use.kind !== kind ? rule : "";
+        return { text: `このキーは、${hotkeyOwnerLabel(other)}の${hotkeyUseLabel(use)}で使われています。${cross}` };
+      }
+    }
+  }
+  return null;
+}
+// 保存の直前の最終チェック（別の窓で同時に設定された場合などに備える）。
+// 「今回新しく設定した・変更したキー」だけを調べる（すでに重複しているデータでも、名前の変更などは保存できるように）。
+// 問題があれば画面に出す文章を、なければ null を返す。
+function validateTileHotkeys(t) {
+  const stored = tiles.find((x) => x.id === t.id);
+  const storedUses = hotkeyUsesOfTile(stored);
+  for (const use of hotkeyUsesOfTile(t)) {
+    const unchanged = storedUses.some((u) => u.slot === use.slot && hotkeyNorm(u.combo) === hotkeyNorm(use.combo));
+    if (unchanged) continue;
+    const clash = findHotkeyClash(use.combo, use.kind, t, use.slot);
+    if (clash) return `ショートカットキーが重複しています。${clash.text}`;
+  }
+  return null;
+}
+// 実際にOSへ登録する起動用ショートカットの一覧を作る。
+// 送信用と同じキー、または先に登録済みの起動用と同じキーの起動用は、登録せず blocked に入れる
+// （送信キーを優先する。データはそのまま残し、どのボタンが無効かを画面でお知らせする）。
+function computeActiveHotkeys() {
+  const sendSet = new Set();
+  tiles.forEach((t) => {
+    hotkeyUsesOfTile(t).forEach((u) => { if (u.kind === "send") sendSet.add(hotkeyNorm(u.combo)); });
   });
+  const list = [];
+  const blocked = [];
+  const seen = new Set();
+  tiles.forEach((t) => {
+    if (!t || !t.hotkey) return;
+    const key = hotkeyNorm(t.hotkey);
+    if (sendSet.has(key) || seen.has(key)) {
+      blocked.push(t);
+      return;
+    }
+    seen.add(key);
+    list.push({ id: t.id, accelerator: t.hotkey });
+  });
+  return { list, blocked };
+}
+// バックアップなどを読み込んだとき、被っている起動用ショートカットを未設定にする（件数を返す）。
+// 送信用と同じ起動用、または先に出てきた起動用と同じ起動用が対象。送信キー同士は被ってよい。
+function clearConflictingLaunchHotkeys(list) {
+  const sendSet = new Set();
+  list.forEach((t) => {
+    hotkeyUsesOfTile(t).forEach((u) => { if (u.kind === "send") sendSet.add(hotkeyNorm(u.combo)); });
+  });
+  const seen = new Set();
+  let cleared = 0;
+  list.forEach((t) => {
+    if (!t || !t.hotkey) return;
+    const key = hotkeyNorm(t.hotkey);
+    if (sendSet.has(key) || seen.has(key)) {
+      t.hotkey = "";
+      cleared++;
+    } else {
+      seen.add(key);
+    }
+  });
+  return cleared;
+}
+// notify=true のときだけ、登録できなかった・無効にしたショートカットを画面でお知らせする
+// （全ての窓が同じ警告を出さないように、ボタンを変更した窓とメイン画面の起動時だけ true で呼ぶ）。
+let lastHotkeyNoticeKey = "";
+function syncHotkeys(notify = false) {
+  const { list, blocked } = computeActiveHotkeys();
+  window.api.registerHotkeys(list).then((failed) => {
+    if (!notify) return;
+    const messages = [];
+    if (blocked.length) {
+      const names = blocked.slice(0, 3).map((t) => hotkeyOwnerLabel(t)).join("、");
+      messages.push(`ショートカットが重複しているため、${blocked.length}件の起動用ショートカットを無効にしています（${names}${blocked.length > 3 ? " ほか" : ""}）`);
+    }
+    if (failed && failed.length) {
+      messages.push(`一部のショートカットを登録できませんでした（${failed.length}件・他アプリと重複の可能性）`);
+    }
+    // 同じ内容を、ボタンを並べ替えるたびなどに繰り返し出さない
+    const key = messages.join("|") + "#" + blocked.map((t) => t.id).join(",") + "#" + (failed || []).join(",");
+    if (messages.length && key !== lastHotkeyNoticeKey) showToast(messages.join(" ／ "));
+    lastHotkeyNoticeKey = messages.length ? key : "";
+  }).catch(() => {});
+}
+
+// OBS連携は廃止した。以前のバージョンで作ったOBS用のボタン（マルチ操作の中の動作を含む）と、
+// 接続設定（ホスト・ポート・パスワード）を、読み込んだデータから取り除く（メモリ上の処理。保存は呼び出し側）。
+function removeObsLeftovers() {
+  const result = { removedTiles: 0, removedSubs: 0, settingsChanged: false };
+  if (!Array.isArray(tiles)) tiles = [];
+  const before = tiles.length;
+  tiles = tiles.filter((t) => !(t && t.type === "obs"));
+  result.removedTiles = before - tiles.length;
+  tiles.forEach((t) => {
+    if (t && Array.isArray(t.subActions)) {
+      const n = t.subActions.length;
+      t.subActions = t.subActions.filter((sub) => !(sub && sub.type === "obs"));
+      result.removedSubs += n - t.subActions.length;
+    }
+  });
+  ["obsHost", "obsPort", "obsPassword"].forEach((key) => {
+    if (settings && key in settings) {
+      delete settings[key];
+      result.settingsChanged = true;
+    }
+  });
+  return result;
 }
 
 async function init() {
   tiles = (await window.api.loadTiles()) || [];
+  if (!Array.isArray(tiles)) tiles = [];
   const loaded = await window.api.loadSettings();
   settings = { ...DEFAULT_SETTINGS, ...(loaded || {}) };
+  const obsCleanup = removeObsLeftovers();
   ensurePageThemes();
   applyTheme();
   updateLockButton();
   renderGrid();
-  syncHotkeys();
+  syncHotkeys(WINDOW_PAGE_INDEX === 0);
+  // 取り除いたOBS関連のデータを保存する（メイン画面だけが行う。同時に複数の窓が保存して競合しないように）
+  if (WINDOW_PAGE_INDEX === 0 && (obsCleanup.removedTiles || obsCleanup.removedSubs || obsCleanup.settingsChanged)) {
+    try {
+      if (obsCleanup.removedTiles || obsCleanup.removedSubs) await persistTiles();
+      if (obsCleanup.settingsChanged) await persistSettings();
+      const count = obsCleanup.removedTiles + obsCleanup.removedSubs;
+      if (count) showToast(`OBS連携は廃止しました。OBS用のボタン・動作${count}個を取り除きました`);
+    } catch (e) {
+      console.warn("OBS cleanup save failed:", e && e.message);
+    }
+  }
   // ミュート系のアイコンを、OSの実際の状態に合わせる。起動時に1回、その後は画面に戻ってきたとき
   // （フォーカス・再表示）と、見えている間の定期的な読み直し（5秒ごと）で最新に保つ。
   // 起動直後はPowerShellの起動・C#のコンパイルが重く、PC起動時の立ち上がりを遅くするため、起動から3秒は読まない（定期・フォーカス・再表示の読み直しも同様）。
@@ -1427,7 +1600,7 @@ function buildTileElement(tile) {
   btn.className = "tile";
   btn.innerHTML = `
     <div class="tile-icon-wrap">
-      <div class="tile-icon" style="${iconBg(tile)}">${iconInner(tile)}</div>
+      <div class="tile-icon${isCssIconTile(tile) ? " css-icon" : ""}" style="${iconBg(tile)}">${iconInner(tile)}</div>
     </div>
   `;
 
@@ -1522,6 +1695,15 @@ function endBrightnessSessionIfActive() {
   }
 }
 
+// アイコンが「CSS描画」（種類が既定・CSS。画像・絵文字が設定されていない場合を含む）かどうか。
+// iconInner() が画像・絵文字として描画しない場合と同じ条件にしてある。
+function isCssIconTile(tile) {
+  const kind = tile && tile.icon ? tile.icon.kind : undefined;
+  const value = tile && tile.icon ? tile.icon.value : undefined;
+  if (kind === "image" && value) return false;
+  if (kind === "emoji" && value) return false;
+  return true;
+}
 // forceOff：編集モーダルで「オフのとき」のプレビューを見せるためだけの引数（省略時は実際の状態を使う）。
 function iconBg(tile, forceOff) {
   if (tile.icon?.kind === "image" && tile.icon.value) return "";
@@ -1731,11 +1913,6 @@ async function handleTileClick(tile, fromMulti) {
     if (err) showToast(err);
     return;
   }
-  if (tile.type === "obs") {
-    if (!tile.action) return showToast("動作が設定されていません");
-    await runObsAction(tile);
-    return;
-  }
   if (tile.type === "shortcutKeys") {
     if (!SHORTCUT_ACTIONS[tile.action]) return showToast("ショートカットが設定されていません");
     const err = await window.api.basicShortcut(tile.action);
@@ -1873,92 +2050,6 @@ async function runMultiAction(tile) {
   }
 }
 
-// ---------- OBS連携（obs-websocket v5、レンダラーから直接WebSocket接続）----------
-async function sha256Base64(str) {
-  const enc = new TextEncoder().encode(str);
-  const digest = await crypto.subtle.digest("SHA-256", enc);
-  return btoa(String.fromCharCode(...new Uint8Array(digest)));
-}
-let obsSocket = null;
-let obsReadyPromise = null;
-function obsConnect() {
-  if (obsSocket && obsSocket.readyState === WebSocket.OPEN && obsReadyPromise) return obsReadyPromise;
-  const host = settings.obsHost || "127.0.0.1";
-  const port = settings.obsPort || 4455;
-  const password = settings.obsPassword || "";
-  obsReadyPromise = new Promise((resolve, reject) => {
-    let settled = false;
-    let ws;
-    try {
-      ws = new WebSocket(`ws://${host}:${port}`);
-    } catch (e) {
-      reject(new Error("OBSに接続できませんでした（接続先の設定を確認してください）"));
-      return;
-    }
-    obsSocket = ws;
-    const timeout = setTimeout(() => {
-      if (!settled) { settled = true; reject(new Error("OBSに接続できませんでした（タイムアウト）")); ws.close(); }
-    }, 4000);
-    ws.addEventListener("message", async (ev) => {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch (e) { return; }
-      if (msg.op === 0) {
-        const d = msg.d || {};
-        const identify = { rpcVersion: d.rpcVersion || 1 };
-        if (d.authentication) {
-          const secret = await sha256Base64(password + d.authentication.salt);
-          identify.authentication = await sha256Base64(secret + d.authentication.challenge);
-        }
-        ws.send(JSON.stringify({ op: 1, d: identify }));
-      } else if (msg.op === 2) {
-        clearTimeout(timeout);
-        if (!settled) { settled = true; resolve(ws); }
-      }
-    });
-    ws.addEventListener("error", () => {
-      if (!settled) { settled = true; clearTimeout(timeout); reject(new Error("OBSに接続できませんでした（起動・WebSocketサーバー設定を確認してください）")); }
-    });
-    ws.addEventListener("close", () => { obsSocket = null; obsReadyPromise = null; });
-  });
-  return obsReadyPromise;
-}
-function obsRequest(ws, requestType, requestData) {
-  return new Promise((resolve, reject) => {
-    const requestId = "req_" + Math.random().toString(36).slice(2);
-    const onMsg = (ev) => {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch (e) { return; }
-      if (msg.op === 7 && msg.d && msg.d.requestId === requestId) {
-        ws.removeEventListener("message", onMsg);
-        const status = msg.d.requestStatus || {};
-        if (status.result) resolve(msg.d.responseData);
-        else reject(new Error(status.comment || "OBSでの操作に失敗しました"));
-      }
-    };
-    ws.addEventListener("message", onMsg);
-    ws.send(JSON.stringify({ op: 6, d: { requestType, requestId, requestData: requestData || {} } }));
-  });
-}
-async function runObsAction(tile) {
-  try {
-    const ws = await obsConnect();
-    if (tile.action === "mute") {
-      if (!tile.obsSource) return showToast("ミュートする音声ソース名を設定してください");
-      await obsRequest(ws, "ToggleInputMute", { inputName: tile.obsSource });
-    } else if (tile.action === "recordStart") {
-      await obsRequest(ws, "StartRecord");
-    } else if (tile.action === "recordStop") {
-      await obsRequest(ws, "StopRecord");
-    } else if (tile.action === "streamStart") {
-      await obsRequest(ws, "StartStream");
-    } else if (tile.action === "streamStop") {
-      await obsRequest(ws, "StopStream");
-    }
-  } catch (e) {
-    showToast(e.message || "OBSでの操作に失敗しました");
-  }
-}
-
 // ---------- QRコード表示 ----------
 function openQrModal(tile) {
   if (!tile.url) return showToast("URLが設定されていません");
@@ -2056,7 +2147,6 @@ function renderMultiSubList(t) {
         if (key === "media" && !MEDIA_ACTIONS[sub.action]) sub.action = "playpause";
         if (key === "zoom" && !ZOOM_ACTIONS[sub.action]) sub.action = "in";
         if (key === "clipboard" && !CLIPBOARD_ACTIONS[sub.action]) sub.action = "text";
-        if (key === "obs" && !OBS_ACTIONS[sub.action]) sub.action = "mute";
         if (key === "shortcutKeys" && !SHORTCUT_ACTIONS[sub.action]) sub.action = "copy";
         renderMultiSubList(t);
       });
@@ -2320,7 +2410,15 @@ function renderSubFields(fieldsEl, sub, t) {
           renderMultiSubList(t);
           return;
         }
-        sub.sendHotkey = `Control+Alt+Shift+${hotkeyChar}`;
+        const subCombo = `Control+Alt+Shift+${hotkeyChar}`;
+        const subIndex = Array.isArray(t.subActions) ? t.subActions.indexOf(sub) : -1;
+        const subClash = findHotkeyClash(subCombo, "send", t, `sub:${subIndex}`);
+        if (subClash) {
+          showToast(subClash.text);
+          renderMultiSubList(t);
+          return;
+        }
+        sub.sendHotkey = subCombo;
         renderMultiSubList(t);
       };
       activeHotkeyKeydownHandler = onKey;
@@ -2328,12 +2426,6 @@ function renderSubFields(fieldsEl, sub, t) {
     });
     const clearBtn = fieldsEl.querySelector("#sf-clearDiscord");
     if (clearBtn) clearBtn.addEventListener("click", () => { sub.sendHotkey = ""; renderMultiSubList(t); });
-  } else if (sub.type === "obs") {
-    actionButtons(OBS_ACTIONS);
-    if (sub.action === "mute") {
-      fieldsEl.insertAdjacentHTML("beforeend", `<input type="text" class="sub-obs-source" maxlength="60" placeholder="ミュートする音声ソース名" value="${escapeHtml(sub.obsSource || "")}" style="margin:6px 0 0;" />`);
-      fieldsEl.querySelector(".sub-obs-source").addEventListener("change", (e) => { sub.obsSource = e.target.value; });
-    }
   } else if (sub.type === "shortcutKeys") {
     actionButtons(SHORTCUT_ACTIONS);
     fieldsEl.insertAdjacentHTML("beforeend", `<div class="path-preview" style="margin:6px 0 0;">基本的なショートカットをワンボタンで操作できます。</div>`);
@@ -2395,7 +2487,6 @@ function renderModal() {
       if (key === "media" && !MEDIA_ACTIONS[t.action]) t.action = "playpause";
       if (key === "zoom" && !ZOOM_ACTIONS[t.action]) t.action = "in";
       if (key === "clipboard" && !CLIPBOARD_ACTIONS[t.action]) t.action = "text";
-      if (key === "obs" && !OBS_ACTIONS[t.action]) t.action = "mute";
       if (key === "shortcutKeys" && !SHORTCUT_ACTIONS[t.action]) t.action = "copy";
       if (key === "multi" && (!Array.isArray(t.subActions) || t.subActions.length < 2)) {
         t.subActions = [{ type: "link", url: "" }, { type: "link", url: "" }];
@@ -2699,7 +2790,14 @@ function renderModal() {
           renderModal();
           return;
         }
-        t.sendHotkey = `Control+Alt+Shift+${hotkeyChar}`;
+        const sendCombo = `Control+Alt+Shift+${hotkeyChar}`;
+        const sendClash = findHotkeyClash(sendCombo, "send", t, "send");
+        if (sendClash) {
+          showToast(sendClash.text);
+          renderModal();
+          return;
+        }
+        t.sendHotkey = sendCombo;
         renderModal();
       };
       activeHotkeyKeydownHandler = onKey;
@@ -2707,25 +2805,6 @@ function renderModal() {
     });
     const clearDiscordBtn = document.getElementById("clearDiscordHotkeyBtn");
     if (clearDiscordBtn) clearDiscordBtn.addEventListener("click", () => { t.sendHotkey = ""; renderModal(); });
-  } else if (t.type === "obs") {
-    typeSpecific.innerHTML = `
-      <div class="field-label" style="margin-top:0;">動作</div><div class="type-row" id="obsActionRow"></div>
-      <div id="obsSourceWrap"></div>
-      <div class="path-preview">OBSの「ツール → WebSocketサーバー設定」を有効にしてください。接続先（ホスト・ポート・パスワード）は設定メニューの「OBS連携」から登録します。</div>
-    `;
-    const obsRow = document.getElementById("obsActionRow");
-    Object.entries(OBS_ACTIONS).forEach(([key, meta]) => {
-      const b = document.createElement("div");
-      b.className = "opt-btn" + (t.action === key ? " active" : "");
-      b.textContent = meta.glyph + " " + meta.label;
-      b.addEventListener("click", () => { t.action = key; normalizeIcon(t); renderModal(); });
-      obsRow.appendChild(b);
-    });
-    const obsSourceWrap = document.getElementById("obsSourceWrap");
-    if (t.action === "mute") {
-      obsSourceWrap.innerHTML = `<div class="field-label">ミュートする音声ソース名</div><input type="text" id="obsSourceInput" maxlength="60" placeholder="例：マイク/Aux" value="${escapeHtml(t.obsSource || "")}" />`;
-      document.getElementById("obsSourceInput").addEventListener("input", (e) => { t.obsSource = e.target.value; });
-    }
   } else if (t.type === "shortcutKeys") {
     typeSpecific.innerHTML = `
       <div class="field-label" style="margin-top:0;">ショートカット</div><div class="type-row" id="shortcutActionRow"></div>
@@ -2946,10 +3025,10 @@ function renderModal() {
         return;
       }
       const combo = `Control+Alt+Shift+${hotkeyChar}`;
-      // 同じショートカットキーは、別の画面のボタンも含めて重複して設定できない
-      const clash = tiles.find((o) => o.id !== t.id && o.hotkey === combo);
+      // 同じショートカットキーは、別の画面のボタンも含めて重複して設定できない（送信用のキーとも重複不可）
+      const clash = findHotkeyClash(combo, "launch", t, "launch");
       if (clash) {
-        showToast(`このショートカットキーは、画面${(clash.pageIndex || 0) + 1}の「${clash.name || "無題"}」で使われています。`);
+        showToast(clash.text);
         renderModal();
         return;
       }
@@ -2990,7 +3069,18 @@ function bindOpenMaximizedRow(t) {
   document.getElementById("tileOpenMaxChk").addEventListener("change", (e) => { t.openMaximized = e.target.checked; });
 }
 
+// Enterキーなどで保存処理が二重に呼ばれても、1回しか実行しないようにする
+let savingModal = false;
 async function saveModal() {
+  if (savingModal || !modalData) return;
+  savingModal = true;
+  try {
+    await saveModalImpl();
+  } finally {
+    savingModal = false;
+  }
+}
+async function saveModalImpl() {
   const t = modalData.tile;
   if (!t.name.trim()) return showToast("名前を入力してください");
   if (t.icon?.kind === "css" && tileHasToggle(t) && !t.icon.offValue) {
@@ -3027,6 +3117,10 @@ async function saveModal() {
       else s.waitAfter = Math.min(10, s.waitAfter);
     });
   }
+
+  // ショートカットキーの重複（別の窓で同時に設定された場合を含む）の最終チェック
+  const hotkeyProblem = validateTileHotkeys(t);
+  if (hotkeyProblem) return showToast(hotkeyProblem);
 
   const cleaned = { ...t, name: t.name.trim() };
   if ((cleaned.type === "link" || cleaned.type === "qr") && !/^https?:\/\//i.test(cleaned.url)) cleaned.url = "https://" + cleaned.url.trim();
@@ -3136,8 +3230,54 @@ document.addEventListener("keydown", (e) => {
   // 動作を1つずつ入力している途中で、編集画面が閉じてしまわないようにするため。
   if (e.target && e.target.closest && e.target.closest(".multi-sub-row")) return;
   const saveBtn = document.getElementById("saveBtn");
-  if (saveBtn) { e.preventDefault(); saveBtn.click(); }
+  if (saveBtn) {
+    e.preventDefault();
+    e.stopPropagation(); // 編集欄側のEnter処理（modalBodyEl.onkeydown）にも届いて二重に保存されないようにする
+    saveBtn.click();
+  }
 }, true);
+
+// 確認ダイアログ（削除・初期化・電源操作・読み込みなど）が開いたとき、Enterで押される「初期位置のボタン」を決める。
+//  ・「適用する」など安全な操作（青いボタン）がある → そのボタン。Enterで決定できる。
+//  ・「削除する」など取り消せない操作（赤いボタン）しかない → キャンセル。うっかりEnterで実行されないようにするため。
+//    実行するときは、Tabキーで赤いボタンに移ってからEnter（またはクリック）。
+//  入力欄があるダイアログでは、入力の邪魔にならないよう何もしない。
+function focusDialogDefaultButton() {
+  if (!overlayEl.classList.contains("show")) return;
+  if (document.getElementById("saveBtn")) return; // ボタンの追加・編集は、別のEnter処理（保存）がある
+  if (modalBodyEl.querySelector("input, textarea, select")) return;
+  const actions = modalBodyEl.querySelector(".modal-actions");
+  if (!actions) return;
+  let target = actions.querySelector(".btn.primary");
+  if (!target && actions.querySelector(".btn.danger")) target = actions.querySelector(".btn:not(.danger)");
+  if (target) {
+    // Enterで押されるボタンが見えるよう、輪郭を付ける（キャンセルが初期位置のときも同じ）
+    if (target.classList) target.classList.add("dialog-default");
+    try { target.focus({ preventScroll: true }); } catch (e) { /* 無視 */ }
+  }
+}
+new MutationObserver(focusDialogDefaultButton).observe(modalBodyEl, { childList: true });
+
+// 設定パネル：チェックボックスにフォーカスがあるときのEnterで切り替え、プリセット名の入力欄のEnterで保存する。
+// （ボタンは、フォーカスがあればEnterで押せる。日本語入力の変換確定のEnterは除く）
+settingsOverlayEl.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (e.isComposing || e.keyCode === 229) return;
+  const target = e.target;
+  if (!target || !target.tagName) return;
+  if (target.tagName === "INPUT" && target.type === "checkbox" && !target.disabled) {
+    e.preventDefault();
+    target.click();
+    return;
+  }
+  if (target.id === "presetNameInput") {
+    const saveBtn = document.getElementById("savePresetBtn");
+    if (saveBtn) {
+      e.preventDefault();
+      saveBtn.click();
+    }
+  }
+});
 
 // ---------- 矢印キーでサブページ切り替え ----------
 // ←/→ で前後のサブページへ。入力欄・ホットキー記録中・モーダル/設定が開いている間は何もしない。
@@ -3168,13 +3308,10 @@ function openConfirmImport(data) {
   document.getElementById("confirmImport").addEventListener("click", async () => {
     tiles = Array.isArray(data.tiles) ? data.tiles : [];
     // 同じショートカットキーは1つのボタンにしか設定できないため、バックアップ内で重なっている場合は後のものを未設定にする
-    const seenHotkeys = new Set();
-    let clearedDup = 0;
-    tiles.forEach((t) => {
-      if (!t || !t.hotkey) return;
-      if (seenHotkeys.has(t.hotkey)) { t.hotkey = ""; clearedDup++; } else seenHotkeys.add(t.hotkey);
-    });
+    // 送信用のキーと同じ起動用ショートカットも、同様に未設定にする
+    let clearedDup = clearConflictingLaunchHotkeys(tiles);
     settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
+    removeObsLeftovers(); // 廃止したOBS連携のボタン・接続設定が古いバックアップに入っていても取り除く
     await persistTiles();
     await persistSettings();
     currentPage = 0;
@@ -3193,23 +3330,35 @@ function openConfirmImport(data) {
 // ・ショートカットキーが他の画面のボタンと重なるものは未設定にする（同じキーは2つ登録できないため）
 // ・存在しない画面を指す「画面切り替え」は未設定にする
 function buildImportedPageTiles(incoming, otherTiles, pageIndex, pageCount) {
+  // 廃止したOBS連携のボタンは、古いバックアップに入っていても読み込まない
+  incoming = incoming.filter((raw) => !(raw && raw.type === "obs"));
   const usedIds = new Set(otherTiles.map((t) => t.id));
-  const usedHotkeys = new Set(otherTiles.map((t) => t.hotkey).filter(Boolean));
+  // 他の画面が使っているキー（起動用・送信用のどちらも）は、読み込む起動用ショートカットに使えない
+  const usedHotkeys = new Set();
+  otherTiles.forEach((o) => hotkeyUsesOfTile(o).forEach((u) => usedHotkeys.add(hotkeyNorm(u.combo))));
   const fixTarget = (p) => (typeof p === "number" && p >= pageCount ? null : p);
   let clearedHotkeys = 0;
   const list = incoming.slice(0, 64).map((raw) => {
     const t = { ...raw, pageIndex };
     if (typeof t.id !== "string" || !t.id || usedIds.has(t.id)) t.id = uid();
     usedIds.add(t.id);
-    if (t.hotkey) {
-      if (usedHotkeys.has(t.hotkey)) { t.hotkey = ""; clearedHotkeys++; }
-      else usedHotkeys.add(t.hotkey);
-    }
     if ("targetPage" in t) t.targetPage = fixTarget(t.targetPage);
     if (Array.isArray(t.subActions)) {
-      t.subActions = t.subActions.map((sub) => (sub && typeof sub === "object" && "targetPage" in sub ? { ...sub, targetPage: fixTarget(sub.targetPage) } : sub));
+      t.subActions = t.subActions
+        .filter((sub) => !(sub && sub.type === "obs"))
+        .map((sub) => (sub && typeof sub === "object" && "targetPage" in sub ? { ...sub, targetPage: fixTarget(sub.targetPage) } : sub));
     }
     return t;
+  });
+  // 読み込んだ画面の中の送信キーと同じ起動用ショートカット、他の画面と同じ起動用ショートカット、
+  // 読み込んだ中で重なる起動用ショートカットを、未設定にする
+  const incomingSends = new Set();
+  list.forEach((t) => hotkeyUsesOfTile(t).forEach((u) => { if (u.kind === "send") incomingSends.add(hotkeyNorm(u.combo)); }));
+  list.forEach((t) => {
+    if (!t.hotkey) return;
+    const key = hotkeyNorm(t.hotkey);
+    if (usedHotkeys.has(key) || incomingSends.has(key)) { t.hotkey = ""; clearedHotkeys++; }
+    else usedHotkeys.add(key);
   });
   return { tiles: list, clearedHotkeys, cutOff: Math.max(0, incoming.length - 64) };
 }
@@ -3287,13 +3436,14 @@ function renderSettingsPanel() {
   settingsBodyEl.innerHTML = `
     <h2 style="font-size:17px;font-weight:700;margin-bottom:10px;">設定</h2>
     <div class="settings-section">
-      <div class="toggle-row"><span>タイトル（Launch-K）を表示</span><input type="checkbox" id="showTitleChk" ${settings.showTitle === true ? "checked" : ""} /></div>
+      <div class="toggle-row"><span>タイトル（Launch-K）を表示${scope}</span><input type="checkbox" id="showTitleChk" ${pt.showTitle === true ? "checked" : ""} /></div>
       <div class="toggle-row"><span>Windows起動時に自動起動</span><input type="checkbox" id="loginChk" ${settings.launchAtLogin ? "checked" : ""} /></div>
+      <div class="link-row" id="shortcutsLink" style="margin-top:4px;">⌨ ショートカットの管理</div>
     </div>
     <div class="settings-section">
       <h3>画面切替</h3>
       <div class="page-tabs" id="settingsPageTabs" style="${settings.pageCount <= 1 ? "display:none;" : ""}"></div>
-      <div class="path-preview" style="margin-top:${settings.pageCount <= 1 ? "0" : "8px"};margin-bottom:8px;">現在 ${settings.pageCount} / 最大${MAX_PAGE_COUNT}画面（1画面max64ボタン）。番号をクリックすると、別ウィンドウとして開きます。</div>
+      <div class="path-preview" style="margin-top:${settings.pageCount <= 1 ? "0" : "8px"};margin-bottom:8px;">現在 ${settings.pageCount} / 最大${MAX_PAGE_COUNT}画面（1画面max64ボタン）。</div>
       <div style="display:flex;gap:8px;">
         <button class="btn default${settings.pageCount >= MAX_PAGE_COUNT ? " at-max" : ""}" id="addPageBtn">＋画面を追加</button>
         <button class="btn default" id="removePageBtn" ${settings.pageCount <= 1 ? "disabled" : ""}>－画面を削除</button>
@@ -3316,6 +3466,20 @@ function renderSettingsPanel() {
     </div>
     <div class="settings-section">
       <h3>ボタンの見た目${scope}</h3>
+      <div class="toggle-row"><span>CSSアイコンに枠を付ける</span><input type="checkbox" id="cssFrameChk" ${pt.cssFrameEnabled === true ? "checked" : ""} /></div>
+      <div id="cssFrameWrap" style="${pt.cssFrameEnabled === true ? "" : "display:none;"}">
+        <div class="path-preview" style="margin-top:0;margin-bottom:8px;">ミュートや星など、アイコンの種類が「既定」「CSS」のボタンの枠です。塗りつぶしの有無に関わらず表示されます。</div>
+        <div class="field-label" style="margin-top:2px;">枠の明暗度（黒〜白）</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <input type="range" id="cssFrameBrightnessSlider" min="0" max="100" step="1" value="${typeof pt.cssFrameBrightness === "number" ? pt.cssFrameBrightness : 85}" style="flex:1;" />
+          <span id="cssFrameBrightnessValue" class="path-preview" style="margin:0;width:44px;text-align:right;">${typeof pt.cssFrameBrightness === "number" ? pt.cssFrameBrightness : 85}%</span>
+        </div>
+        <div class="field-label" style="margin-top:2px;">枠の太さ</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <input type="range" id="cssFrameWidthSlider" min="1" max="3" step="1" value="${typeof pt.cssFrameWidth === "number" ? pt.cssFrameWidth : 2}" style="flex:1;" />
+          <span id="cssFrameWidthValue" class="path-preview" style="margin:0;width:44px;text-align:right;">${typeof pt.cssFrameWidth === "number" ? pt.cssFrameWidth : 2}px</span>
+        </div>
+      </div>
       <div class="field-label">ボタンのアイコンの大きさ</div>
       <div class="type-row" id="iconSizeRow"></div>
       <div class="toggle-row"><span>ボタン間の距離を0にする</span><input type="checkbox" id="gapZeroChk" ${pt.gapZero === true ? "checked" : ""} /></div>
@@ -3337,16 +3501,6 @@ function renderSettingsPanel() {
     </div>
     <div class="settings-section"><h3>テーマ${settings.pageCount > 1 ? `（画面${WINDOW_PAGE_INDEX + 1}のみ）` : ""}</h3><div class="theme-row" id="themeRow"></div><div id="themeExtra"></div></div>
     <div class="settings-section"><h3>アクセントカラー${scope}</h3><div class="color-row" id="accentRow"></div></div>
-    <div class="settings-section">
-      <h3>OBS連携</h3>
-      <div class="path-preview" style="margin-top:0;">OBS側で「ツール → WebSocketサーバー設定」を開き、サーバーを有効にした上で、同じ接続先をここに登録してください。</div>
-      <div class="field-label">ホスト</div>
-      <input type="text" id="obsHostInput" placeholder="127.0.0.1" value="${escapeHtml(settings.obsHost || "")}" />
-      <div class="field-label">ポート</div>
-      <input type="text" id="obsPortInput" placeholder="4455" value="${escapeHtml(String(settings.obsPort ?? ""))}" />
-      <div class="field-label">パスワード（設定している場合のみ）</div>
-      <input type="password" id="obsPasswordInput" placeholder="未設定なら空欄のまま" value="${escapeHtml(settings.obsPassword || "")}" />
-    </div>
     <div class="settings-section">
       <h3>バックアップ</h3>
       <div class="field-label">全体（すべてのLaunch-K画面）</div>
@@ -3586,7 +3740,9 @@ function renderSettingsPanel() {
     renderSettingsPanel();
   });
 
-  document.getElementById("showTitleChk").addEventListener("change", async (e) => { settings.showTitle = e.target.checked; await persistSettings(); renderGrid(); });
+  // タイトル表示は画面ごとの設定（この窓の画面だけに反映）
+  document.getElementById("showTitleChk").addEventListener("change", async (e) => { currentPageTheme().showTitle = e.target.checked; await persistSettings(); renderGrid(); });
+  document.getElementById("shortcutsLink").addEventListener("click", () => window.api.openShortcuts());
   document.getElementById("gapZeroChk").addEventListener("change", async (e) => {
     currentPageTheme().gapZero = e.target.checked;
     currentPage = 0;
@@ -3606,6 +3762,39 @@ function renderSettingsPanel() {
     await persistSettings();
     renderSettingsPanel();
   });
+  document.getElementById("cssFrameChk").addEventListener("change", async (e) => {
+    currentPageTheme().cssFrameEnabled = e.target.checked;
+    await persistSettings();
+    renderSettingsPanel();
+  });
+  const cssFrameBrightnessSlider = document.getElementById("cssFrameBrightnessSlider");
+  if (cssFrameBrightnessSlider) {
+    cssFrameBrightnessSlider.addEventListener("mousedown", () => window.api.suspendAlwaysOnTop());
+    cssFrameBrightnessSlider.addEventListener("input", (e) => {
+      const v = Number(e.target.value);
+      document.getElementById("cssFrameBrightnessValue").textContent = v + "%";
+      currentPageTheme().cssFrameBrightness = v;
+      applyTheme();
+    });
+    cssFrameBrightnessSlider.addEventListener("change", async (e) => {
+      currentPageTheme().cssFrameBrightness = Number(e.target.value);
+      await persistSettings();
+    });
+  }
+  const cssFrameWidthSlider = document.getElementById("cssFrameWidthSlider");
+  if (cssFrameWidthSlider) {
+    cssFrameWidthSlider.addEventListener("mousedown", () => window.api.suspendAlwaysOnTop());
+    cssFrameWidthSlider.addEventListener("input", (e) => {
+      const v = Number(e.target.value);
+      document.getElementById("cssFrameWidthValue").textContent = v + "px";
+      currentPageTheme().cssFrameWidth = v;
+      applyTheme();
+    });
+    cssFrameWidthSlider.addEventListener("change", async (e) => {
+      currentPageTheme().cssFrameWidth = Number(e.target.value);
+      await persistSettings();
+    });
+  }
   const iconRingBrightnessSlider = document.getElementById("iconRingBrightnessSlider");
   if (iconRingBrightnessSlider) {
     iconRingBrightnessSlider.addEventListener("mousedown", () => window.api.suspendAlwaysOnTop());
@@ -3633,10 +3822,6 @@ function renderSettingsPanel() {
     currentPageTheme().panelOpacity = Number(e.target.value) / 100;
     await persistSettings();
   });
-
-  document.getElementById("obsHostInput").addEventListener("change", async (e) => { settings.obsHost = e.target.value.trim() || "127.0.0.1"; await persistSettings(); });
-  document.getElementById("obsPortInput").addEventListener("change", async (e) => { settings.obsPort = Number(e.target.value) || 4455; await persistSettings(); });
-  document.getElementById("obsPasswordInput").addEventListener("change", async (e) => { settings.obsPassword = e.target.value; await persistSettings(); });
 
   const settingsPageTabsEl = document.getElementById("settingsPageTabs");
   if (settings.pageCount > 1) {
@@ -3700,10 +3885,16 @@ function renderSettingsPanel() {
 
 
   const linksSection = document.getElementById("linksSection");
-  linksSection.innerHTML = `<div class="link-row" id="guideLink">📖 使い方</div><div class="link-row" id="homepageLink">🏠 かせき-Homepage</div><div class="link-row" id="updateLink">🔄 更新を確認</div><div class="link-row" id="tosLink">📄 利用規約</div>`;
+  linksSection.innerHTML = `<div class="link-row" id="guideLink">📖 使い方</div><div class="link-row" id="homepageLink">🏠 かせき-Homepage</div><div class="link-row" id="updateLink">🔄 更新を確認</div><div class="link-row" id="updateLogLink">📝 更新ログを開く</div><div class="link-row" id="tosLink">📄 利用規約</div>`;
   document.getElementById("guideLink").addEventListener("click", () => window.api.openGuide());
   document.getElementById("homepageLink").addEventListener("click", () => window.api.openExternal("https://kaseki-homepage.vercel.app/"));
   document.getElementById("tosLink").addEventListener("click", renderTosPanel);
+  // 更新の経過を書き残したログ（update.log）の場所を開く。更新がうまくいかないときの原因調べ用。
+  document.getElementById("updateLogLink").addEventListener("click", async () => {
+    let err = null;
+    try { err = await window.api.showUpdateLog(); } catch (e) { err = "error"; }
+    if (err) showToast("更新ログを開けませんでした");
+  });
 
   const updateLink = document.getElementById("updateLink");
   const updateLinkLabel = "🔄 更新を確認";

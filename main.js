@@ -66,7 +66,7 @@ function allAppWindows() {
   return list;
 }
 function isOwnWindowHwnd(hwnd) {
-  return [mainWindow, timerWindow, guideWindow, tooltipWindow, ...pageWindows.values()]
+  return [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, ...pageWindows.values()]
     .map(getNativeHwnd)
     .some((h) => h !== null && h === hwnd);
 }
@@ -650,6 +650,51 @@ ipcMain.on("pages:busySet", (event, isBusy) => {
   for (const w of allAppWindows()) w.webContents.send("pages:busy", !!isBusy);
 });
 
+// ---- 更新のための終了準備 ----
+// 「今すぐ再起動して更新」のとき、インストーラーを起動する前に呼ぶ。
+// インストーラーは古い版のファイルを削除・上書きするため、Launch-K側が使用中のまま残っていると
+// 置き換えに失敗する（画面なしの更新だと失敗に気づけず、アイコンだけ「白い紙」になる）。
+// そこで、ウィンドウ・常駐PowerShell・グローバルショートカット・トレイをすべて片付け、
+// 描画用のプロセスが消えるのを待ってから戻る。途中で何か失敗しても、できるところまで進める。
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function prepareQuitForUpdate() {
+  const note = (...args) => { try { updater.log("prepareQuit:", ...args); } catch (e) { /* ログ失敗は無視 */ } };
+  app.isQuitting = true;
+  note("isQuitting = true");
+  try { unregisterAllHotkeys(); note("global shortcuts released"); } catch (e) { note("release shortcuts failed:", String(e && e.message)); }
+  try { killMultiPsSession("update"); note("PowerShell session closed"); } catch (e) { note("close PowerShell failed:", String(e && e.message)); }
+  try {
+    if (tray && !tray.isDestroyed()) tray.destroy();
+    tray = null;
+    note("tray removed");
+  } catch (e) { note("remove tray failed:", String(e && e.message)); }
+  let destroyed = 0;
+  const wins = [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, ...pageWindows.values()];
+  for (const w of wins) {
+    try {
+      if (w && !w.isDestroyed()) { w.destroy(); destroyed++; }
+    } catch (e) { /* 次の窓へ */ }
+  }
+  note("windows destroyed:", destroyed);
+  try { app.releaseSingleInstanceLock(); } catch (e) { /* 無視 */ }
+  // 描画用プロセス（Tab）が消えるのを最大3秒待つ
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 3000) {
+    let tabs = 0;
+    try {
+      tabs = app.getAppMetrics().filter((m) => m.type === "Tab").length;
+    } catch (e) {
+      break; // 取得できないときは待たずに進む
+    }
+    if (tabs === 0) break;
+    await waitMs(100);
+  }
+  await waitMs(500); // OS側のファイルの解放が反映されるまでの少しの余裕
+  note("finished (waited", Date.now() - startedAt, "ms)");
+}
+
 function createTray() {
   tray = new Tray(TRAY_ICON_PATH);
   tray.setToolTip("Launch-K");
@@ -717,8 +762,9 @@ app.whenReady().then(() => {
   createTray();
   updater.init({
     getParentWindow: () => mainWindow,
-    // 閉じてもトレイに残る作りなので、更新のための終了ではウィンドウを隠さず本当に閉じさせる
-    prepareQuit: () => { app.isQuitting = true; },
+    // 閉じてもトレイに残る作りなので、更新のための終了では、ウィンドウ・常駐プロセス・ショートカット登録を
+    // すべて片付け、終わるまで待ってからインストーラーを起動する（使用中のファイルを残さないため）。
+    prepareQuit: () => prepareQuitForUpdate(),
   });
   app.on("activate", () => {
     if (!mainWindow) createWindow();
@@ -752,6 +798,7 @@ app.on("web-contents-created", (event, contents) => {
 // レンダラーがクラッシュ（応答なし含む）した場合、トレイだけが残って
 // 何も操作できなくなるのを防ぐため、該当ウィンドウを作り直す。
 app.on("render-process-gone", (event, contents, details) => {
+  if (app.isQuitting) return; // 終了・更新の準備中にウィンドウを作り直さない
   if (details && (details.reason === "clean-exit" || details.reason === "killed")) return;
   if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents === contents) {
     mainWindow.destroy();
@@ -766,7 +813,7 @@ app.on("window-all-closed", () => {
 
 app.on("will-quit", () => {
   if (tooltipWindow && !tooltipWindow.isDestroyed()) tooltipWindow.destroy();
-  globalShortcut.unregisterAll();
+  unregisterAllHotkeys();
   // 明るさの長押しやマルチ操作用に開いたままの常駐PowerShellセッションが
   // あれば、アプリ終了時にプロセスが残ってしまわないよう明示的に閉じる。
   killMultiPsSession("app-quit");
@@ -774,6 +821,20 @@ app.on("will-quit", () => {
 
 // ---- アプリのバージョン表示・更新確認（設定画面から） ----
 ipcMain.handle("app:getVersion", () => app.getVersion());
+// 更新ログ（update.log）の場所を、エクスプローラーで開く。まだ無ければログのあるフォルダを開く。
+ipcMain.handle("app:showUpdateLog", async () => {
+  try {
+    const logPath = updater.getUpdateLogPath();
+    if (logPath) {
+      shell.showItemInFolder(logPath);
+      return null;
+    }
+    const err = await shell.openPath(app.getPath("userData"));
+    return err ? String(err) : null;
+  } catch (e) {
+    return String((e && e.message) || e);
+  }
+});
 ipcMain.handle("app:checkForUpdates", () => updater.checkNow(true));
 
 // ---- タイル設定の読み書き ----
@@ -1359,7 +1420,43 @@ function parseAcceleratorToVkCodes(combo) {
   }
   return codes;
 }
+// 送るキーが、Launch-K自身の起動用ショートカットと同じだと、送ったキーを自分で受け取ってしまい、
+// 本来の相手（Discordなど）に届かない。設定画面で同じキーにならないようにしているが、念のため、
+// 送っている間だけその登録を外し、送り終わったら戻す。
 function pressHotkeyCombo(combo) {
+  const key = hotkeyMapKey(combo);
+  const entry = key ? activeHotkeys.get(key) : null;
+  let suspended = false;
+  if (entry) {
+    try {
+      globalShortcut.unregister(entry.accelerator);
+      suspended = true;
+    } catch (e) { /* 外せなければそのまま送る */ }
+  }
+  const restore = () => {
+    if (!suspended) return;
+    setTimeout(() => {
+      try {
+        // 送っている間に登録内容が作り直されていなければ元に戻す
+        if (activeHotkeys.get(key) === entry && !globalShortcut.isRegistered(entry.accelerator)) {
+          globalShortcut.register(entry.accelerator, entry.callback);
+        }
+      } catch (e) { /* 無視 */ }
+    }, 250);
+  };
+  let result;
+  try {
+    result = pressHotkeyComboRaw(combo);
+  } catch (e) {
+    restore();
+    return Promise.resolve(String((e && e.message) || e));
+  }
+  return Promise.resolve(result).then(
+    (value) => { restore(); return value; },
+    (err) => { restore(); return String((err && err.message) || err); }
+  );
+}
+function pressHotkeyComboRaw(combo) {
   const codes = parseAcceleratorToVkCodes(combo);
   if (!codes) return Promise.resolve("送信するキーが設定されていません");
   if (native.available && native.pressKeyCombo(codes)) {
@@ -1396,13 +1493,48 @@ const BASIC_SHORTCUTS = {
   selectAll: "Control+A",
   save: "Control+S",
   find: "Control+F",
+  closeTab: "Control+W",          // ブラウザのタブを閉じる
+  reopenTab: "Control+Shift+T",   // 閉じたタブを復元する
 };
+// ブラウザ以外のウィンドウに送ると別の物（エクスプローラー、Wordの文書など）が閉じてしまうため、
+// 「前面のウィンドウがブラウザのときだけ」送る操作。
+const BROWSER_ONLY_SHORTCUTS = new Set(["closeTab", "reopenTab"]);
+const BROWSER_PROCESS_NAMES = new Set([
+  "chrome", "msedge", "firefox", "brave", "vivaldi", "opera", "opera_gx", "chromium",
+  "arc", "whale", "librewolf", "floorp", "waterfox", "thorium", "zen", "iexplore",
+]);
+// いま前面にあるウィンドウのプロセス名（拡張子なし・小文字）を返す。取れなければ null。
+function getForegroundProcessName() {
+  if (process.platform !== "win32") return Promise.resolve(null);
+  const defScript =
+    "Add-Type -Language CSharp -TypeDefinition " +
+    "'using System; using System.Runtime.InteropServices; " +
+    "public class FgProcHelper { [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); " +
+    "[DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid); }'; ";
+  const callScript =
+    "$fgPid = [uint32]0; " +
+    "[FgProcHelper]::GetWindowThreadProcessId([FgProcHelper]::GetForegroundWindow(), [ref]$fgPid) | Out-Null; " +
+    "try { (Get-Process -Id $fgPid -ErrorAction Stop).ProcessName } catch { '' }";
+  return runPsSmart("FgProcHelper", defScript, callScript).then(({ error, stdout }) => {
+    if (error) return null;
+    const lines = String(stdout || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const name = lines.length ? lines[lines.length - 1].toLowerCase() : "";
+    return name || null;
+  });
+}
 ipcMain.handle("system:basicShortcut", async (event, id) => {
   if (process.platform !== "win32") return "この機能は現在Windowsのみ対応しています";
   const combo = Object.prototype.hasOwnProperty.call(BASIC_SHORTCUTS, id) ? BASIC_SHORTCUTS[id] : null;
   if (!combo) return "未対応のショートカットです";
   // 直前まで使っていたウィンドウへフォーカスを戻してから送る
   await restoreExternalFocus();
+  if (BROWSER_ONLY_SHORTCUTS.has(id)) {
+    const name = await getForegroundProcessName();
+    if (!name) return "前面のウィンドウを確認できなかったため、送信しませんでした";
+    if (!BROWSER_PROCESS_NAMES.has(name)) {
+      return `前面のウィンドウがブラウザではないため、送信しませんでした（${name}）。先にブラウザを前面にしてください`;
+    }
+  }
   return await pressHotkeyCombo(combo);
 });
 
@@ -1691,7 +1823,7 @@ function prewarmSnapType() {
   multiPsPendingDefs.set("SnapWin", p);
 }
 async function snapWindowDirect(direction, waitForNew, usedHwnds, acceptExisting) {
-  const own = [mainWindow, timerWindow, guideWindow, tooltipWindow, ...pageWindows.values()].map(getNativeHwnd).filter((h) => h !== null);
+  const own = [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, ...pageWindows.values()].map(getNativeHwnd).filter((h) => h !== null);
   // まずkoffiによるネイティブ実装を試す（PowerShell起動もコンパイルも挟まないため高速）。
   // ここで何か想定外のエラーが起きた場合だけ、下の従来方式（PowerShell）にフォールバックする。
   if (nativeSnap.available) {
@@ -2131,6 +2263,53 @@ ipcMain.on("guide:close", () => {
   if (guideWindow && !guideWindow.isDestroyed()) guideWindow.close();
 });
 
+// ---- ショートカットの管理（一覧を見るだけの別ウィンドウ）----
+let shortcutsWindow = null;
+function createOrShowShortcutsWindow() {
+  if (shortcutsWindow && !shortcutsWindow.isDestroyed()) {
+    shortcutsWindow.show();
+    shortcutsWindow.focus();
+    return;
+  }
+  shortcutsWindow = new BrowserWindow({
+    width: 560,
+    height: 620,
+    minWidth: 380,
+    minHeight: 320,
+    resizable: true,
+    minimizable: true,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: false,
+    frame: false,
+    show: false,
+    title: "ショートカットの管理",
+    icon: process.platform === "win32" ? path.join(__dirname, "assets", "icon.ico") : undefined,
+    webPreferences: {
+      preload: path.join(__dirname, "shortcuts-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  shortcutsWindow.setMenuBarVisibility(false);
+  shortcutsWindow.loadFile("shortcuts.html");
+  shortcutsWindow.once("ready-to-show", () => { if (shortcutsWindow && !shortcutsWindow.isDestroyed()) shortcutsWindow.show(); });
+  shortcutsWindow.on("closed", () => { shortcutsWindow = null; });
+}
+ipcMain.handle("shortcuts:open", () => {
+  createOrShowShortcutsWindow();
+  return true;
+});
+// 一覧に必要なデータ（ボタンと画面数）。読むだけで、何も変更しない。
+ipcMain.handle("shortcuts:getData", () => {
+  const settings = loadSettings();
+  const pageCount = Math.max(1, Math.min(6, Number(settings && settings.pageCount) || 1));
+  return { tiles: loadTiles(), pageCount };
+});
+ipcMain.on("shortcuts:close", () => {
+  if (shortcutsWindow && !shortcutsWindow.isDestroyed()) shortcutsWindow.close();
+});
+
 // ---- フォルダ選択ダイアログ ----
 ipcMain.handle("dialog:pickFolder", async (event) => {
   // 押した画面を親にする（2ページ目以降の画面から押しても、その画面の前に出る）
@@ -2142,20 +2321,57 @@ ipcMain.handle("dialog:pickFolder", async (event) => {
 });
 
 // ---- グローバルショートカット ----
+// 起動用ショートカット（ボタンに登録するキー）をOSに登録する。
+// 全ウィンドウ（メイン＋ページ別画面）が同じ一覧を送ってくるため、
+//  ・一覧が前回と同じで、登録に失敗したキーも無いときは、登録し直さない（無駄な解除・再登録をしない）
+//  ・同じキーが一覧に2回あっても、先に出てきたほうだけ登録し、残りは「登録できなかったキー」として返す
+const activeHotkeys = new Map(); // 小文字にしたキー → { id, accelerator, callback }
+let lastHotkeySignature = null;
+let lastHotkeyFailed = [];
+function hotkeyMapKey(accelerator) {
+  return String(accelerator || "").toLowerCase();
+}
+// すべての起動用ショートカットの登録を解除し、記憶もリセットする
+function unregisterAllHotkeys() {
+  try { globalShortcut.unregisterAll(); } catch (e) { /* 無視 */ }
+  activeHotkeys.clear();
+  lastHotkeySignature = null;
+  lastHotkeyFailed = [];
+}
 ipcMain.handle("hotkeys:register", (event, list) => {
-  globalShortcut.unregisterAll();
+  const clean = [];
   const failed = [];
-  (list || []).forEach(({ id, accelerator }) => {
-    if (!accelerator) return;
+  const seen = new Set();
+  (Array.isArray(list) ? list : []).forEach((item) => {
+    if (!item || typeof item.accelerator !== "string" || !item.accelerator) return;
+    const key = hotkeyMapKey(item.accelerator);
+    if (seen.has(key)) {
+      failed.push(item.accelerator); // 同じキーの二重登録
+      return;
+    }
+    seen.add(key);
+    clean.push({ id: String(item.id), accelerator: item.accelerator });
+  });
+  const signature = JSON.stringify(clean.map((c) => [c.id, c.accelerator]).sort());
+  if (signature === lastHotkeySignature && lastHotkeyFailed.length === 0 && failed.length === 0) {
+    return [];
+  }
+  try { globalShortcut.unregisterAll(); } catch (e) { /* 無視 */ }
+  activeHotkeys.clear();
+  clean.forEach(({ id, accelerator }) => {
     try {
-      const ok = globalShortcut.register(accelerator, () => {
-        if (mainWindow) mainWindow.webContents.send("hotkey:triggered", id);
-      });
-      if (!ok) failed.push(accelerator);
+      const callback = () => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("hotkey:triggered", id);
+      };
+      const ok = globalShortcut.register(accelerator, callback);
+      if (ok) activeHotkeys.set(hotkeyMapKey(accelerator), { id, accelerator, callback });
+      else failed.push(accelerator);
     } catch (e) {
       failed.push(accelerator);
     }
   });
+  lastHotkeySignature = signature;
+  lastHotkeyFailed = failed.slice();
   return failed;
 });
 
@@ -2226,7 +2442,7 @@ ipcMain.handle("capture:screen", async (event, kind) => {
     const [cw, ch] = refWin ? refWin.getContentSize() : [960, 680];
     aspect = ch > 0 ? cw / ch : 960 / 680;
   }
-  const hidden = [mainWindow, timerWindow, guideWindow, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
+  const hidden = [mainWindow, timerWindow, guideWindow, shortcutsWindow, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
   const refWasHidden = !!refWin && hidden.includes(refWin);
   try {
     hideTooltip(true);
@@ -2313,7 +2529,7 @@ ipcMain.handle("capture:fullScreenshot", async (event) => {
   const callerWin = BrowserWindow.fromWebContents(event.sender);
   const refWin = (callerWin && !callerWin.isDestroyed()) ? callerWin : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
   const display = refWin ? screen.getDisplayMatching(refWin.getBounds()) : screen.getPrimaryDisplay();
-  const hidden = [mainWindow, timerWindow, guideWindow, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
+  const hidden = [mainWindow, timerWindow, guideWindow, shortcutsWindow, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
   try {
     hideTooltip(true);
     hidden.forEach((w) => w.hide());
@@ -2344,7 +2560,7 @@ ipcMain.handle("capture:fullScreenshot", async (event) => {
 
 // ---- 全データの初期化（リセット） ----
 ipcMain.handle("app:reset", (event) => {
-  globalShortcut.unregisterAll();
+  unregisterAllHotkeys();
   try { saveTiles([]); } catch (e) {}
   try { saveSettings({ ...DEFAULT_SETTINGS }); } catch (e) {}
   try { fs.rmSync(BG_DIR, { recursive: true, force: true }); } catch (e) {}

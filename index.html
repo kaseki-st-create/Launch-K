@@ -233,6 +233,13 @@
     box-shadow: 0 0 0 1px var(--icon-ring-color),
                 inset 0 0 0 1px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(255,255,255,0.10);
   }
+  /* ハンバーガーメニュー→ボタンの見た目「CSSアイコンに枠を付ける」がオンのとき、CSSアイコン
+     （種類が既定・CSSのもの）に、塗りつぶしの有無に関わらず同じ枠を付ける。色・太さは画面ごとの設定
+     （--css-frame-color／--css-frame-width）。枠の外側に描くので、アイコンの中身は隠れない。
+     囲み線（--icon-ring-color）や内側の薄い線はこの枠に置き換わるため、二重に見えない。 */
+  body.css-frame-on .tile-icon.css-icon {
+    box-shadow: 0 0 0 var(--css-frame-width, 2px) var(--css-frame-color, rgb(217, 217, 217));
+  }
   .tile-icon img { width: var(--icon-size); height: var(--icon-size); border-radius: var(--icon-radius); object-fit: cover; }
   .tile-icon-emoji, .tile-icon > span {
     /* グリフの色がテーマ色に近くても読み取れるよう、常に軽い縁取りを付ける。 */
@@ -384,6 +391,9 @@
   .btn.primary { background: var(--accent); color: var(--accent-contrast); }
   .btn.default { background: var(--panel-alt-solid); color: var(--text); }
   .btn.danger { background: #FF6B5E; color: #14161B; }
+  /* 確認ダイアログで、Enterキーを押したときに押される「初期位置のボタン」を示す輪郭（renderer.jsのfocusDialogDefaultButton） */
+  .btn.dialog-default { box-shadow: 0 0 0 2px var(--accent); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .btn.default.at-max { color: var(--text-muted); }
   .btn:disabled { opacity: 0.5; cursor: default; }
 
