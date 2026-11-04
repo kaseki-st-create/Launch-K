@@ -496,7 +496,7 @@ const PAGE_SETTING_KEYS = [
   "themeMode", "customColor", "bgImagePath", "bgImageFit", "bgImageBrightness", "panelColorOverride", "iconSize",
   "accent", "gridColumns", "gridRows", "showNameLabel", "showHotkeyLabel", "showShadows", "panelOpacity",
   "iconRingEnabled", "iconRingBrightness", "gapZero", "showTooltip",
-  "showTitle", "cssFrameEnabled", "cssFrameBrightness", "cssFrameWidth",
+  "showTitle",
 ];
 // 以前のバージョンでは全画面共通（settings直下）だったキー。
 // 画面別の値がまだ無いときだけ、その共通値を引き継ぐ（＝更新しても見た目が変わらない）。
@@ -541,13 +541,9 @@ function sanitizePageSetting(key, value, fallback) {
     case "gapZero":
     case "showTooltip":
     case "showTitle":
-    case "cssFrameEnabled":
       return typeof value === "boolean" ? value : fallback;
     case "iconRingBrightness":
-    case "cssFrameBrightness":
       return typeof value === "number" && value >= 0 && value <= 100 ? Math.round(value) : fallback;
-    case "cssFrameWidth":
-      return typeof value === "number" && value >= 1 && value <= 3 ? Math.round(value) : fallback;
     default:
       return value;
   }
@@ -598,9 +594,6 @@ const DEFAULT_SETTINGS = {
   iconSize: "large",
   iconRingEnabled: false,
   iconRingBrightness: 55,
-  cssFrameEnabled: false, // CSSアイコン（既定・CSS）の枠を付けるか（画面ごと）
-  cssFrameBrightness: 85, // 枠の明暗度（0=黒〜100=白）
-  cssFrameWidth: 2, // 枠の太さ（1〜3px）
   gapZero: false, // ボタン間の距離を0にする（画面ごと）
   showTooltip: true, // ボタンにマウスを乗せたときのツールチップ表示（画面ごと）
   accent: "#FF6B5E",
@@ -638,6 +631,8 @@ const MAX_PAGE_COUNT = 6; // ページの最大数（1ページ最大8×8=64個 
 // 1つのウィンドウが担当するページは起動時に固定され、以後このウィンドウ内で
 // 他のページへ切り替わることはない（切り替えたい場合は該当ページの別画面を開く）。
 const WINDOW_PAGE_INDEX = Math.max(0, Math.min(MAX_PAGE_COUNT - 1, parseInt(new URLSearchParams(location.search).get("page"), 10) || 0));
+// Launch-0（スマホ操作用の画面）として開かれたウィンドウかどうか。処理の本体は launch0.js。
+const IS_LAUNCH0 = new URLSearchParams(location.search).get("mode") === "launch0";
 let selfClosing = false; // ページ削除などでこのウィンドウを自動で閉じている最中の二重呼び出し防止
 
 let tiles = [];
@@ -730,6 +725,7 @@ function hotkeyCharFromEvent(ev) {
 }
 
 function showToast(msg) {
+  l0OnToast(msg); // Launch-0：スマホから押したボタンの結果メッセージをスマホにも返すため
   toastEl.textContent = msg;
   toastEl.classList.add("show");
   clearTimeout(toastTimer);
@@ -741,8 +737,19 @@ function toFileUrl(p) {
   // アプリのアイコン自動取得ではdata URLをそのまま使うため、素通しする
   if (p.startsWith("data:")) return p;
   let clean = p.replace(/\\/g, "/");
-  if (!clean.startsWith("/")) clean = "/" + clean;
-  return "file://" + encodeURI(clean);
+  // UNC（\\server\share\...）は file://server/share/... にする
+  let host = "";
+  if (clean.startsWith("//")) {
+    const rest = clean.slice(2);
+    const i = rest.indexOf("/");
+    host = i < 0 ? rest : rest.slice(0, i);
+    clean = i < 0 ? "/" : rest.slice(i);
+  } else if (!clean.startsWith("/")) {
+    clean = "/" + clean;
+  }
+  // encodeURIは # ? を変換しない（ファイル名に含まれると途中で切れる）ため、区切りごとに変換する
+  const enc = clean.split("/").map((seg, idx) => (idx === 1 && /^[A-Za-z]:$/.test(seg)) ? seg : encodeURIComponent(seg)).join("/");
+  return "file://" + host + enc;
 }
 
 function escapeHtml(str) {
@@ -894,6 +901,10 @@ function applyTheme() {
   root.setProperty("--tile-border-color", panelAlpha <= 0 ? "transparent" : tilePanel.border);
   root.setProperty("--text", preset.text);
   root.setProperty("--text-muted", preset.textMuted);
+  // ハンバーガーメニュー内の各項目を囲む枠の色。暗い背景は白っぽく、明るい背景は黒っぽくして、どのテーマでも見えるようにする。
+  const menuDark = luminanceOfAny(preset.bg1) < 0.5;
+  root.setProperty("--box-border", menuDark ? "rgba(255, 255, 255, 0.30)" : "rgba(0, 0, 0, 0.28)");
+  root.setProperty("--box-bg", menuDark ? "rgba(255, 255, 255, 0.04)" : "rgba(0, 0, 0, 0.035)");
   root.setProperty("--text-dim", readableDimColor(preset.panelAlt));
   const accent = pt.accent || "#FFB238";
   root.setProperty("--accent", accent);
@@ -932,12 +943,6 @@ function applyTheme() {
   } else {
     root.setProperty("--icon-ring-color", "transparent");
   }
-  // CSSアイコン（アイコンの種類が「既定」「CSS」のもの）専用の枠。塗りつぶしの有無に関わらず同じ枠を付ける。
-  // ハンバーガーメニュー→ボタンの見た目で、オン/オフ・明暗度（黒〜白）・太さを設定できる。
-  document.body.classList.toggle("css-frame-on", pt.cssFrameEnabled === true);
-  const frameV = Math.round(((typeof pt.cssFrameBrightness === "number" ? pt.cssFrameBrightness : 85) / 100) * 255);
-  root.setProperty("--css-frame-color", `rgb(${frameV}, ${frameV}, ${frameV})`);
-  root.setProperty("--css-frame-width", `${typeof pt.cssFrameWidth === "number" ? pt.cssFrameWidth : 2}px`);
   // サブページ切替（◀ 1 / 2 ▶）の文字縁取り色。パネルが明るいテーマでは黒縁が汚く見えるため、
   // パネルの明るさに応じて縁取りを黒/白に切り替える。
   root.setProperty("--pager-outline-rgb", luminanceOfAny(preset.panel) > 0.5 ? "255, 255, 255" : "0, 0, 0");
@@ -951,12 +956,14 @@ function isPageLockedAt(idx) {
   return !!settings.alwaysOnTop;
 }
 function updateLockButton() {
+  if (IS_LAUNCH0) { l0UpdateLockBtn(); return; } // Launch-0は自分専用のロック（設定には保存しない）
   const active = isPageLockedAt(WINDOW_PAGE_INDEX);
   lockBtn.textContent = active ? "🔒" : "🔓";
   lockBtn.classList.toggle("active", active);
   lockBtn.title = active ? "この画面を常に最前面に表示：オン" : "この画面を常に最前面に表示：オフ";
 }
 lockBtn.addEventListener("click", async () => {
+  if (IS_LAUNCH0) { l0ToggleLock(); return; }
   const count = Math.max(1, Number(settings.pageCount) || 1);
   const locks = [];
   for (let i = 0; i < count; i++) locks.push(isPageLockedAt(i));
@@ -1204,10 +1211,13 @@ async function init() {
   settings = { ...DEFAULT_SETTINGS, ...(loaded || {}) };
   const obsCleanup = removeObsLeftovers();
   ensurePageThemes();
+  if (IS_LAUNCH0) { await initLaunch0(); return; } // Launch-0：ボタンの一覧やショートカットは扱わない（launch0.js）
   applyTheme();
   updateLockButton();
   renderGrid();
   syncHotkeys(WINDOW_PAGE_INDEX === 0);
+  l0InstallHotkey(); // 0 + K の同時押しでLaunch-0を開く
+  if (WINDOW_PAGE_INDEX === 0) window.api.onLaunch0Ended((reason) => { const m = l0EndMessage(reason); if (m) showToast(m); });
   // 取り除いたOBS関連のデータを保存する（メイン画面だけが行う。同時に複数の窓が保存して競合しないように）
   if (WINDOW_PAGE_INDEX === 0 && (obsCleanup.removedTiles || obsCleanup.removedSubs || obsCleanup.settingsChanged)) {
     try {
@@ -1377,6 +1387,7 @@ function isSmallWindow() {
 let lastTotalPages = 1;
 let gridRelayoutGuard = false;
 function renderGrid() {
+  if (IS_LAUNCH0) { l0OnGridRender(); return; } // Launch-0ではグリッドを描かない（ミュート状態などをスマホへ反映するだけ）
   window.api.hideTooltip(); // 再描画で消えるボタンのツールチップが残らないようにする
   clampActivePage();
   const gridTopUsed = gridEl.getBoundingClientRect().top; // この値でレイアウトを計算する（後でページ切替UIの有無でずれたら計算し直す）
@@ -1780,6 +1791,7 @@ async function runVolumeAction(tile) {
     }
   }
 }
+const activeSounds = new Set();
 async function handleTileClick(tile, fromMulti) {
   // マルチ操作の実行中は、それ自身の内部処理（サブ動作の順次実行）以外からの
   // ボタン操作をすべて受け付けない。これを許すと、例えば「LINEを開いて応答待ち」の
@@ -1803,9 +1815,23 @@ async function handleTileClick(tile, fromMulti) {
   if (tile.type === "sound") {
     if (!tile.filePath) return showToast("音声ファイルが設定されていません");
     try {
-      const audio = new Audio(toFileUrl(tile.filePath));
+      const audio = new Audio();
+      activeSounds.add(audio); // 再生中にGCされないよう保持
+      const done = () => activeSounds.delete(audio);
+      audio.addEventListener("ended", done);
+      audio.addEventListener("error", () => {
+        done();
+        const c = audio.error && audio.error.code;
+        showToast(c === 4 ? "再生できませんでした：ファイルが見つからないか、形式が未対応です" : "再生できませんでした：読み込みエラー（" + (c || "?") + "）");
+      });
+      audio.preload = "auto";
+      audio.src = toFileUrl(tile.filePath);
       audio.volume = Math.max(0, Math.min(1, (tile.volume ?? 100) / 100));
-      audio.play().catch(() => showToast("再生できませんでした"));
+      audio.play().catch((err) => {
+        if (err && err.name === "AbortError") return; // 読み込み中に別操作で中断されただけ
+        done();
+        showToast("再生できませんでした" + (err && err.name ? "（" + err.name + "）" : ""));
+      });
     } catch (e) { showToast("再生できませんでした"); }
     return;
   }
@@ -3440,7 +3466,7 @@ function renderSettingsPanel() {
       <div class="toggle-row"><span>Windows起動時に自動起動</span><input type="checkbox" id="loginChk" ${settings.launchAtLogin ? "checked" : ""} /></div>
       <div class="link-row" id="shortcutsLink" style="margin-top:4px;">⌨ ショートカットの管理</div>
     </div>
-    <div class="settings-section">
+    <div class="settings-section boxed">
       <h3>画面切替</h3>
       <div class="page-tabs" id="settingsPageTabs" style="${settings.pageCount <= 1 ? "display:none;" : ""}"></div>
       <div class="path-preview" style="margin-top:${settings.pageCount <= 1 ? "0" : "8px"};margin-bottom:8px;">現在 ${settings.pageCount} / 最大${MAX_PAGE_COUNT}画面（1画面max64ボタン）。</div>
@@ -3449,7 +3475,7 @@ function renderSettingsPanel() {
         <button class="btn default" id="removePageBtn" ${settings.pageCount <= 1 ? "disabled" : ""}>－画面を削除</button>
       </div>
     </div>
-    <div class="settings-section">
+    <div class="settings-section boxed">
       <h3>レイアウト${scope}</h3>
       <div class="dim-pair">
         <div><div class="field-label">行数</div><div class="type-row" id="rowsRow"></div></div>
@@ -3464,22 +3490,8 @@ function renderSettingsPanel() {
       <div class="type-row" id="presetRow"></div>
       <div class="path-preview" id="presetHint"></div>
     </div>
-    <div class="settings-section">
+    <div class="settings-section boxed">
       <h3>ボタンの見た目${scope}</h3>
-      <div class="toggle-row"><span>CSSアイコンに枠を付ける</span><input type="checkbox" id="cssFrameChk" ${pt.cssFrameEnabled === true ? "checked" : ""} /></div>
-      <div id="cssFrameWrap" style="${pt.cssFrameEnabled === true ? "" : "display:none;"}">
-        <div class="path-preview" style="margin-top:0;margin-bottom:8px;">ミュートや星など、アイコンの種類が「既定」「CSS」のボタンの枠です。塗りつぶしの有無に関わらず表示されます。</div>
-        <div class="field-label" style="margin-top:2px;">枠の明暗度（黒〜白）</div>
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-          <input type="range" id="cssFrameBrightnessSlider" min="0" max="100" step="1" value="${typeof pt.cssFrameBrightness === "number" ? pt.cssFrameBrightness : 85}" style="flex:1;" />
-          <span id="cssFrameBrightnessValue" class="path-preview" style="margin:0;width:44px;text-align:right;">${typeof pt.cssFrameBrightness === "number" ? pt.cssFrameBrightness : 85}%</span>
-        </div>
-        <div class="field-label" style="margin-top:2px;">枠の太さ</div>
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-          <input type="range" id="cssFrameWidthSlider" min="1" max="3" step="1" value="${typeof pt.cssFrameWidth === "number" ? pt.cssFrameWidth : 2}" style="flex:1;" />
-          <span id="cssFrameWidthValue" class="path-preview" style="margin:0;width:44px;text-align:right;">${typeof pt.cssFrameWidth === "number" ? pt.cssFrameWidth : 2}px</span>
-        </div>
-      </div>
       <div class="field-label">ボタンのアイコンの大きさ</div>
       <div class="type-row" id="iconSizeRow"></div>
       <div class="toggle-row"><span>ボタン間の距離を0にする</span><input type="checkbox" id="gapZeroChk" ${pt.gapZero === true ? "checked" : ""} /></div>
@@ -3499,9 +3511,9 @@ function renderSettingsPanel() {
       </div>
       <div class="toggle-row" style="margin-bottom:0;"><span>ツールチップ（名前・ショートカット）を表示</span><input type="checkbox" id="showTooltipChk" ${pt.showTooltip !== false ? "checked" : ""} /></div>
     </div>
-    <div class="settings-section"><h3>テーマ${settings.pageCount > 1 ? `（画面${WINDOW_PAGE_INDEX + 1}のみ）` : ""}</h3><div class="theme-row" id="themeRow"></div><div id="themeExtra"></div></div>
-    <div class="settings-section"><h3>アクセントカラー${scope}</h3><div class="color-row" id="accentRow"></div></div>
-    <div class="settings-section">
+    <div class="settings-section boxed"><h3>テーマ${settings.pageCount > 1 ? `（画面${WINDOW_PAGE_INDEX + 1}のみ）` : ""}</h3><div class="theme-row" id="themeRow"></div><div id="themeExtra"></div></div>
+    <div class="settings-section boxed"><h3>アクセントカラー${scope}</h3><div class="color-row" id="accentRow"></div></div>
+    <div class="settings-section boxed">
       <h3>バックアップ</h3>
       <div class="field-label">全体（すべてのLaunch-K画面）</div>
       <div style="display:flex;gap:8px;margin-bottom:12px;">
@@ -3516,10 +3528,15 @@ function renderSettingsPanel() {
       <div class="path-preview" style="margin-top:8px;margin-bottom:0;">画面だけのバックアップは、その画面のボタンと画面ごとの設定（レイアウト・表示・テーマなど）を保存します。読み込むと、いま開いている画面だけが上書きされ、他の画面は変わりません。</div>
     </div>
     <div id="linksSection"></div>
-    <div class="settings-section">
+    <div class="settings-section boxed">
       <h3 style="color:#FF6B5E;">危険な操作</h3>
       <button class="btn danger" id="resetAllBtn" style="width:100%;">すべて初期化する</button>
       <div class="path-preview" style="margin-top:8px;margin-bottom:0;">追加したすべてのボタン・操作・ショートカットキー・見た目の設定を、すべて設定前の初期状態に戻します。元に戻せません。</div>
+    </div>
+    <div class="settings-section boxed">
+      <h3>スマホ操作</h3>
+      <button class="btn default" id="launch0OpenBtn" style="width:100%;">📱 Launch-0（スマホから操作する）</button>
+      <div class="path-preview" style="margin-top:8px;margin-bottom:0;">iPhoneからこのPCのボタンを押せるようにします。開くと、いまの画面はすべて閉じます。（0 と K の同時押しでも開けます）</div>
     </div>
   `;
 
@@ -3762,39 +3779,6 @@ function renderSettingsPanel() {
     await persistSettings();
     renderSettingsPanel();
   });
-  document.getElementById("cssFrameChk").addEventListener("change", async (e) => {
-    currentPageTheme().cssFrameEnabled = e.target.checked;
-    await persistSettings();
-    renderSettingsPanel();
-  });
-  const cssFrameBrightnessSlider = document.getElementById("cssFrameBrightnessSlider");
-  if (cssFrameBrightnessSlider) {
-    cssFrameBrightnessSlider.addEventListener("mousedown", () => window.api.suspendAlwaysOnTop());
-    cssFrameBrightnessSlider.addEventListener("input", (e) => {
-      const v = Number(e.target.value);
-      document.getElementById("cssFrameBrightnessValue").textContent = v + "%";
-      currentPageTheme().cssFrameBrightness = v;
-      applyTheme();
-    });
-    cssFrameBrightnessSlider.addEventListener("change", async (e) => {
-      currentPageTheme().cssFrameBrightness = Number(e.target.value);
-      await persistSettings();
-    });
-  }
-  const cssFrameWidthSlider = document.getElementById("cssFrameWidthSlider");
-  if (cssFrameWidthSlider) {
-    cssFrameWidthSlider.addEventListener("mousedown", () => window.api.suspendAlwaysOnTop());
-    cssFrameWidthSlider.addEventListener("input", (e) => {
-      const v = Number(e.target.value);
-      document.getElementById("cssFrameWidthValue").textContent = v + "px";
-      currentPageTheme().cssFrameWidth = v;
-      applyTheme();
-    });
-    cssFrameWidthSlider.addEventListener("change", async (e) => {
-      currentPageTheme().cssFrameWidth = Number(e.target.value);
-      await persistSettings();
-    });
-  }
   const iconRingBrightnessSlider = document.getElementById("iconRingBrightnessSlider");
   if (iconRingBrightnessSlider) {
     iconRingBrightnessSlider.addEventListener("mousedown", () => window.api.suspendAlwaysOnTop());
@@ -3922,6 +3906,7 @@ function renderSettingsPanel() {
   });
 
   document.getElementById("resetAllBtn").addEventListener("click", openConfirmReset);
+  document.getElementById("launch0OpenBtn").addEventListener("click", () => { closeSettingsPanel(); openLaunch0Confirm(); });
 }
 
 // ---------- 画面追加：新しい画面の設定の作り方を選ぶ ----------
@@ -4034,7 +4019,7 @@ function renderTosPanel() {
     <h2 style="font-size:17px;font-weight:700;margin-bottom:14px;">利用規約</h2>
     <div class="tos-scroll">
       <h4>1. サービスの内容</h4>
-      このアプリは、ユーザーが自由にリンク・サウンド・ファイル・音量操作・電源操作・クリップボードコピーのショートカットを登録し、ワンクリックまたはショートカットキーで実行できる個人用ランチャーツールです。
+      このアプリは、ユーザーが自由にリンク・サウンド・ファイル・音量操作・電源操作・クリップボードコピーのショートカットを登録し、ワンクリックまたはショートカットキーで実行できる個人用ランチャーツールです。また、スマートフォンのブラウザからパソコンのボタンを押せる「Launch-0」（スマホ操作）の機能を備えています。
       <h4>2. リンク先コンテンツについて</h4>
       登録したリンク先ウェブサイトの内容、安全性、合法性、可用性について、運営者は一切の保証をせず、責任を負いません。リンク先で生じたいかなる損害についても自己責任でご対応ください。
       <h4>3. ファイル・電源操作について</h4>
@@ -4044,9 +4029,15 @@ function renderTosPanel() {
       <h4>5. 自己責任でのご利用</h4>
       本アプリには、ウィンドウの配置・移動、キー操作の送信、音量・マイクのミュート切替、画面のキャプチャ、複数の動作の自動連続実行など、お使いのパソコンを操作する機能が含まれます。本アプリの利用（設定の誤りや操作ミス、他のソフトウェアとの組み合わせ、パソコンの環境による動作の違いを含みます）により生じた、データの損失、機器の不具合、第三者への損害、情報の漏えい、その他一切の損害・不利益は、すべてユーザー自身の責任とします。ユーザーは、ご自身の判断と責任において本アプリを利用するものとします。ただし、法令により運営者が責任を負う場合は除きます。
       また、画面キャプチャで取得した画像には、個人情報や機密情報が写り込むことがあります。取得・保存・共有は、ご自身の責任で行ってください。
-      <h4>6. 免責事項</h4>
-      本アプリは現状有姿で提供され、内容の正確性・完全性・特定目的への適合性についていかなる保証も行いません。本アプリの利用により生じたいかなる損害についても、運営者は責任を負いません。
-      <div class="tos-copy">© kaseki</div>
+      <h4>6. スマホ操作（Launch-0）について</h4>
+      Launch-0は、スマートフォンのブラウザからパソコンのボタンを押せるようにする機能です。接続には、パソコンに表示されるQRコードと6文字のパスワード、およびパソコン側での許可が必要で、同時に接続できるのは1台までです。スマホから実行できるのは、あらかじめ登録したボタンの操作に限られ、画面の切り替え・タイマー・QRコード・電源操作などは実行できません。パソコン側からいつでも一時停止・切断でき、通信の途切れ、無操作、最長接続時間、スリープや画面ロックなどの場合には自動的に切断されます。QRコードとパスワードの取り扱い、接続を許可するかどうかの判断、スマホやパソコンの管理は、ご自身の責任で行ってください。心当たりのない接続要求は許可しないでください。
+      <h4>7. 通信方法とTailscaleについて</h4>
+      Launch-0の接続方法には「Tailscale」と「同じWi-Fi」があります。Tailscaleは第三者が提供する別のサービスで、その利用にはTailscale自身の利用規約・プライバシーポリシーが適用されます。本アプリはTailscaleの提供元とは関係がなく、Tailscaleの動作・安全性・可用性を保証しません。本アプリは、接続してきた端末がこのパソコンと同じアカウントのものかを確認するため、Tailscaleの状態（端末名・アカウント名・接続経路など）を読み取りますが、Tailscaleのパスワードは扱いません。アカウント名は、画面に表示するかどうかを切り替えられます。「同じWi-Fi」は通信が暗号化されないため、自宅など信頼できるネットワークでのみ使ってください。Windowsファイアウォールの許可を追加する場合は、管理者の確認が表示され、Tailscaleの番号帯からの通信だけを許可する規則が1つ追加されます。
+      <h4>8. アップデートについて</h4>
+      本アプリは、新しいバージョンがあると自動で確認・ダウンロードし、終了時にインストールすることがあります。更新により、機能や動作が変わる場合があります。
+      <h4>9. 免責事項</h4>
+      本アプリは現状有姿で提供され、内容の正確性・完全性・特定目的への適合性についていかなる保証も行いません。本アプリの利用により生じたいかなる損害についても、運営者は責任を負いません。これには、スマホ操作（Launch-0）や外部サービス（Tailscaleなど）の利用・障害に起因する損害を含みます。
+      <div class="tos-copy">最終更新：2026年11月4日<br>© kaseki</div>
     </div>
   `;
   document.getElementById("backToSettings").addEventListener("click", renderSettingsPanel);

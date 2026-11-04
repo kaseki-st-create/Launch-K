@@ -1,10 +1,24 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, clipboard, nativeImage, screen, desktopCapturer } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, clipboard, nativeImage, screen, desktopCapturer, powerMonitor } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { exec, execFile, spawn } = require("child_process");
 const native = require("./native"); // koffiによるuser32.dll直接呼び出し（利用不可ならnative.availableがfalseになる）
 const nativeSnap = require("./native-snap"); // 画面分割（スナップ）専用のkoffi実装。失敗時はPowerShell方式にフォールバック
 const updater = require("./updater"); // 自動アップデート（GitHub Releases）。開発中や読み込み失敗時は何もしない
+const { createRemote } = require("./remote"); // Launch-0（スマホ操作）の通信。ボタンIDだけを受け取る
+const tailscale = require("./tailscale"); // Tailscale（VPN）との連携。接続相手が同じアカウントの端末かの確認など
+
+// ---- Launch-0（スマホ操作）の状態 ----
+let launch0Window = null;   // Launch-0のウィンドウ（接続中、PCで開いているのはこれだけ）
+let launch0Locked = false;  // Launch-0のロック（常に最前面）
+let launch0Closing = false;
+let remoteActive = false;   // Launch-0を開いている間 true（この間はショートカットキーの登録・他画面を開く操作を止める）
+let remote = null;
+let tsClient = null;
+let launch0PendingClose = null; // 実行中の操作があるため、終わるまで待っている閉じる処理の理由
+let launch0BusyTimer = null;
+let launch0ExecDepth = 0;       // スマホから実行中の「ウィンドウ操作を含む処理」の数
+let launch0ExecRestore = null;
 
 const ICON_SCRIPT_PATH = path.join(__dirname, "scripts", "get-icon.ps1");
 
@@ -65,8 +79,14 @@ function allAppWindows() {
   for (const w of pageWindows.values()) if (w && !w.isDestroyed()) list.push(w);
   return list;
 }
+// 自アプリの全ウィンドウのネイティブハンドル（Launch-0を含む）。分割・フォーカスの対象から除外するために使う。
+function ownNativeHandles() {
+  return [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, launch0Window, ...pageWindows.values()]
+    .map(getNativeHwnd)
+    .filter((h) => h !== null);
+}
 function isOwnWindowHwnd(hwnd) {
-  return [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, ...pageWindows.values()]
+  return [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, launch0Window, ...pageWindows.values()]
     .map(getNativeHwnd)
     .some((h) => h !== null && h === hwnd);
 }
@@ -486,6 +506,8 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      // スマホ操作・ホットキー・マルチ操作はユーザーのクリックを伴わないため、これが無いとサウンドが無音で拒否される
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
   win.loadFile("index.html");
@@ -529,6 +551,7 @@ function createWindow() {
 // ページ0は常にメインウィンドウ。ページ1以降は専用のウィンドウを1つだけ持ち、
 // 既に開いていれば新しく作らず前面に出すだけにする（同じページの二重表示を防止）。
 function openPageWindow(pageIndex) {
+  if (remoteActive) return; // スマホ接続中（Launch-0を開いている間）は、他の画面を開かない
   const idx = Math.max(0, Math.round(Number(pageIndex) || 0));
   if (idx === 0) {
     if (!mainWindow) createWindow();
@@ -554,6 +577,7 @@ function openPageWindow(pageIndex) {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
   win.loadFile("index.html", { query: { page: String(idx) } });
@@ -671,7 +695,8 @@ async function prepareQuitForUpdate() {
     note("tray removed");
   } catch (e) { note("remove tray failed:", String(e && e.message)); }
   let destroyed = 0;
-  const wins = [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, ...pageWindows.values()];
+  try { if (remote) remote.shutdown("app-quit"); note("remote stopped"); } catch (e) { /* 無視 */ }
+  const wins = [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, launch0Window, ...pageWindows.values()];
   for (const w of wins) {
     try {
       if (w && !w.isDestroyed()) { w.destroy(); destroyed++; }
@@ -702,6 +727,7 @@ function createTray() {
     {
       label: "開く",
       click: () => {
+        if (focusLaunch0IfActive()) return;
         if (!mainWindow) createWindow();
         mainWindow.show();
         mainWindow.focus();
@@ -717,6 +743,7 @@ function createTray() {
   ]);
   tray.setContextMenu(menu);
   tray.on("click", () => {
+    if (focusLaunch0IfActive()) return;
     if (!mainWindow) {
       createWindow();
       return;
@@ -740,6 +767,7 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
+    if (focusLaunch0IfActive()) return;
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
@@ -767,6 +795,7 @@ app.whenReady().then(() => {
     prepareQuit: () => prepareQuitForUpdate(),
   });
   app.on("activate", () => {
+    if (focusLaunch0IfActive()) return;
     if (!mainWindow) createWindow();
     else mainWindow.show();
   });
@@ -800,10 +829,16 @@ app.on("web-contents-created", (event, contents) => {
 app.on("render-process-gone", (event, contents, details) => {
   if (app.isQuitting) return; // 終了・更新の準備中にウィンドウを作り直さない
   if (details && (details.reason === "clean-exit" || details.reason === "killed")) return;
+  // Launch-0のウィンドウ自身が異常終了したら、閉じて画面1に戻す（接続も切る）
+  if (launch0Window && !launch0Window.isDestroyed() && launch0Window.webContents === contents) {
+    setImmediate(() => closeLaunch0("error", { force: true }));
+    return;
+  }
   if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents === contents) {
     mainWindow.destroy();
     mainWindow = null;
-    createWindow();
+    // Launch-0を開いている間は、画面1を新しく出さない（Launch-0を閉じるときに作り直す）
+    if (!remoteActive) createWindow();
   }
 });
 
@@ -812,6 +847,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("will-quit", () => {
+  try { if (remote) remote.shutdown("app-quit"); } catch (e) { /* 無視 */ }
   if (tooltipWindow && !tooltipWindow.isDestroyed()) tooltipWindow.destroy();
   unregisterAllHotkeys();
   // 明るさの長押しやマルチ操作用に開いたままの常駐PowerShellセッションが
@@ -1823,7 +1859,9 @@ function prewarmSnapType() {
   multiPsPendingDefs.set("SnapWin", p);
 }
 async function snapWindowDirect(direction, waitForNew, usedHwnds, acceptExisting) {
-  const own = [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, ...pageWindows.values()].map(getNativeHwnd).filter((h) => h !== null);
+  // 自アプリのウィンドウは、分割・配置の対象にしない（Launch-0も含める。含めないと、スマホからのマルチ操作で
+  // Launch-0自身が分割されてしまう）
+  const own = ownNativeHandles();
   // まずkoffiによるネイティブ実装を試す（PowerShell起動もコンパイルも挟まないため高速）。
   // ここで何か想定外のエラーが起きた場合だけ、下の従来方式（PowerShell）にフォールバックする。
   if (nativeSnap.available) {
@@ -1902,6 +1940,12 @@ function runSnapAction(direction, opts) {
     // 直接配置できなかった場合（管理者権限のアプリなど、または新しいウィンドウを
     // 見つけられなかった場合）のみ、従来のキー送信方式で試す
     await restoreExternalFocus();
+    // キーは「いま前面にあるウィンドウ」に届く。前面が自アプリ（Launch-0など）のままなら、
+    // そのウィンドウが分割されてしまうので、キーは送らない。
+    if (native.available) {
+      const fg = native.getForegroundWindowHandle();
+      if (fg && isOwnWindowHwnd(fg)) return "分割する対象のウィンドウを特定できず、Launch-Kのウィンドウが前面だったため、分割は行いませんでした";
+    }
     const fallbackErr = await pressSnapKeys(code);
     if (fallbackErr) return fallbackErr;
     if (waitForNew) return "新しく開いたウィンドウを検出できなかったため、直前のウィンドウに対して分割操作を行いました";
@@ -2149,6 +2193,7 @@ let timerWindow = null;
 let timerAlwaysOnTopEnabled = true; // タイマー画面側のロック状態をメインプロセス側でも把握しておく
 let timerSuspendReassert = false; // ネイティブの色選択ポップアップ表示中など、一時的にロック再適用を止めるためのフラグ
 function createOrShowTimerWindow(seconds) {
+  if (remoteActive) return; // スマホ接続中は、Launch-0以外を開かない
   if (timerWindow && !timerWindow.isDestroyed()) {
     timerWindow.show();
     timerWindow.focus();
@@ -2173,6 +2218,7 @@ function createOrShowTimerWindow(seconds) {
       preload: path.join(__dirname, "timer-preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      autoplayPolicy: "no-user-gesture-required", // タイマーが鳴る時点では、操作の直後とは限らないため
     },
   });
   timerWindow.setMenuBarVisibility(false);
@@ -2222,6 +2268,7 @@ ipcMain.on("timer:close", () => {
 // ・ロック（常に最前面）は、メインウィンドウと同じ仕様で既定オフ
 let guideWindow = null;
 function createOrShowGuideWindow() {
+  if (remoteActive) return;
   if (guideWindow && !guideWindow.isDestroyed()) {
     guideWindow.show();
     guideWindow.focus();
@@ -2266,6 +2313,7 @@ ipcMain.on("guide:close", () => {
 // ---- ショートカットの管理（一覧を見るだけの別ウィンドウ）----
 let shortcutsWindow = null;
 function createOrShowShortcutsWindow() {
+  if (remoteActive) return;
   if (shortcutsWindow && !shortcutsWindow.isDestroyed()) {
     shortcutsWindow.show();
     shortcutsWindow.focus();
@@ -2326,6 +2374,332 @@ ipcMain.handle("dialog:pickFolder", async (event) => {
 //  ・一覧が前回と同じで、登録に失敗したキーも無いときは、登録し直さない（無駄な解除・再登録をしない）
 //  ・同じキーが一覧に2回あっても、先に出てきたほうだけ登録し、残りは「登録できなかったキー」として返す
 const activeHotkeys = new Map(); // 小文字にしたキー → { id, accelerator, callback }
+// ============================================================================
+// Launch-0（スマホから操作する）
+//  ・開く：画面1〜6・タイマー・使い方などをすべて閉じ、Launch-0のウィンドウだけを開く
+//  ・接続中：PCで開いているのはLaunch-0だけ。ショートカットキー（グローバル）は止める
+//  ・終わる：サーバーを止め、Launch-0を閉じて、画面1を表示する
+//  ・通信そのものは remote.js、画面は launch0.js（index.html?mode=launch0）
+// ============================================================================
+function focusLaunch0IfActive() {
+  if (!remoteActive) return false;
+  if (launch0Window && !launch0Window.isDestroyed()) {
+    if (launch0Window.isMinimized()) launch0Window.restore();
+    launch0Window.show();
+    launch0Window.focus();
+  }
+  return true; // Launch-0を開いている間は、メイン画面は出さない
+}
+function isLaunch0Sender(event) {
+  return !!(launch0Window && !launch0Window.isDestroyed() && event && event.sender === launch0Window.webContents);
+}
+function sendToLaunch0(channel, payload) {
+  try {
+    if (launch0Window && !launch0Window.isDestroyed()) launch0Window.webContents.send(channel, payload);
+  } catch (e) { /* 無視 */ }
+}
+function ensureRemote() {
+  if (remote) return remote;
+  if (!tsClient) tsClient = tailscale.createClient();
+  remote = createRemote({
+    mobileHtmlPath: path.join(__dirname, "mobile.html"),
+    appVersion: app.getVersion(),
+    tailscale: tsClient,
+    emit: (evt) => {
+      if (evt.type === "tap") rememberForegroundWindowAsExternal(); // ズーム・画面分割の対象（いま前面にある他アプリ）を記録
+      sendToLaunch0("remote:event", evt);
+      if (evt.type === "pending" && launch0Window && !launch0Window.isDestroyed()) {
+        // 許可の確認に気づけるよう、前面に出して点滅させる
+        try { launch0Window.show(); launch0Window.focus(); launch0Window.flashFrame(true); } catch (e) { /* 無視 */ }
+      }
+      if (evt.type === "ended") setImmediate(() => closeLaunch0(evt.reason));
+    },
+  });
+  return remote;
+}
+function openLaunch0() {
+  if (launch0Window && !launch0Window.isDestroyed()) { focusLaunch0IfActive(); return; }
+  launch0Closing = false;
+  remoteActive = true;
+  unregisterAllHotkeys();
+  hideTooltip(true);
+  // 大きさ・位置はメイン画面にそろえる
+  let size = computeInitialWindowSize();
+  let pos = null;
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const [w, h] = mainWindow.getContentSize();
+      size = { width: Math.max(360, w), height: Math.max(300, h) };
+      pos = mainWindow.getPosition();
+    }
+  } catch (e) { /* 既定の大きさのまま */ }
+  // 他の画面をすべて閉じる（画面1はトレイに隠すだけ。終了後に再表示する）
+  for (const w of [...pageWindows.values()]) { try { if (w && !w.isDestroyed()) w.close(); } catch (e) { /* 無視 */ } }
+  for (const w of [timerWindow, guideWindow, shortcutsWindow]) { try { if (w && !w.isDestroyed()) w.close(); } catch (e) { /* 無視 */ } }
+  try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide(); } catch (e) { /* 無視 */ }
+
+  const win = new BrowserWindow({
+    width: size.width, height: size.height,
+    x: pos ? pos[0] : undefined, y: pos ? pos[1] : undefined,
+    useContentSize: true,
+    backgroundColor: "#14161B",
+    autoHideMenuBar: true,
+    icon: ICON_PATH,
+    title: "Launch-0",
+    show: false,
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false, autoplayPolicy: "no-user-gesture-required" },
+  });
+  launch0Window = win;
+  // Launch-0は、外のページを開いたり、再読み込み・開発者ツールで中身を操作したりできないようにする
+  // （再読み込みすると、画面の状態だけが消えて、サーバーが動いたままになってしまうため）
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (e) => e.preventDefault());
+  win.webContents.on("before-input-event", (e, input) => {
+    if (input.type !== "keyDown") return;
+    const k = String(input.key || "").toLowerCase();
+    const ctrl = !!(input.control || input.meta);
+    if (k === "f5" || k === "f12" || (ctrl && k === "r") || (ctrl && input.shift && (k === "i" || k === "j" || k === "c"))) e.preventDefault();
+  });
+  win.loadFile("index.html", { query: { mode: "launch0" } });
+  win.once("ready-to-show", () => { if (!win.isDestroyed()) win.show(); });
+  // ロックの初期状態は、画面1と同じ
+  launch0Locked = isPageLocked(loadSettings(), 0);
+  if (launch0Locked) win.setAlwaysOnTop(true, "screen-saver");
+  win.on("blur", () => {
+    if (launch0Locked && !win.isDestroyed()) win.setAlwaysOnTop(true, "screen-saver");
+    rememberForegroundWindowAsExternal();
+  });
+  win.on("focus", handleAnyWindowFocus);
+  win.on("close", (event) => {
+    if (launch0Window !== win || launch0Closing || app.isQuitting) return;
+    // 実行中の操作があるあいだは閉じない（途中で止まると、PCで中途半端な状態になるため）
+    if (remote && remote.isBusy()) {
+      event.preventDefault();
+      dialog.showMessageBox(win, { type: "info", buttons: ["OK"], title: "Launch-0", message: "スマホからの操作を実行中です。完了するまで閉じられません。" }).catch(() => {});
+      return;
+    }
+    const st = remote ? remote.status() : null;
+    if (st && st.session && st.session.state === "active") {
+      // 接続中にうっかり閉じてしまわないよう確認する
+      event.preventDefault();
+      dialog.showMessageBox(win, {
+        type: "question", buttons: ["切断して閉じる", "キャンセル"], defaultId: 1, cancelId: 1,
+        title: "Launch-0", message: "スマホとの接続を切断して、Launch-0を閉じますか？",
+      }).then((r) => { if (r.response === 0) closeLaunch0("closed"); }).catch(() => {});
+    }
+  });
+  win.on("closed", () => {
+    if (launch0Window === win) { launch0Window = null; closeLaunch0("closed", { force: true }); }
+  });
+  // PCがスリープ・画面ロックしたら、切断する
+  const onSuspend = () => { if (remote) remote.disconnect("pc-sleep"); };
+  const onLock = () => { if (remote) remote.disconnect("pc-lock"); };
+  powerMonitor.on("suspend", onSuspend);
+  powerMonitor.on("lock-screen", onLock);
+  launch0PowerHandlers.push(["suspend", onSuspend], ["lock-screen", onLock]);
+}
+const launch0PowerHandlers = [];
+function closeLaunch0(reason, opts) {
+  if (launch0Closing) return;
+  // スマホから実行中の操作（特にマルチ操作）は、Launch-0の中で動いている。ここで閉じると途中で止まってしまうので、
+  // 終わるまで待ってから閉じる（接続は先に切れていてもよい）。固まった場合は、remote.js側の上限時間で解除される。
+  const force = !!(opts && opts.force) || app.isQuitting;
+  if (!force && remote && remote.isBusy() && launch0Window && !launch0Window.isDestroyed()) {
+    if (!launch0PendingClose) launch0PendingClose = reason;
+    sendToLaunch0("remote:event", { type: "closing-wait" });
+    if (!launch0BusyTimer) {
+      launch0BusyTimer = setInterval(() => {
+        if (remote && remote.isBusy() && launch0Window && !launch0Window.isDestroyed()) return;
+        clearInterval(launch0BusyTimer);
+        launch0BusyTimer = null;
+        const r = launch0PendingClose || "closed";
+        launch0PendingClose = null;
+        closeLaunch0(r, { force: true });
+      }, 300);
+    }
+    return;
+  }
+  if (launch0BusyTimer) { clearInterval(launch0BusyTimer); launch0BusyTimer = null; }
+  launch0PendingClose = null;
+  launch0ExecDepth = 0; launch0ExecRestore = null;
+  launch0Closing = true;
+  try { if (remote) remote.shutdown(reason); } catch (e) { /* 無視 */ }
+  for (const [ev, h] of launch0PowerHandlers) { try { powerMonitor.removeListener(ev, h); } catch (e) { /* 無視 */ } }
+  launch0PowerHandlers.length = 0;
+  const w = launch0Window;
+  launch0Window = null;
+  if (w && !w.isDestroyed()) { try { w.destroy(); } catch (e) { /* 無視 */ } }
+  remoteActive = false;
+  launch0Locked = false;
+  lastHotkeySignature = null; // 止めていたショートカットキーを、あらためて登録できるようにする
+  if (app.isQuitting) return;
+  // 画面1を表示する（他の画面は元に戻さない）
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+    else { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); }
+    const target = mainWindow;
+    const notify = () => {
+      if (!target || target.isDestroyed()) return;
+      target.webContents.send("tiles:changed"); // ショートカットキーの登録をやり直す
+      target.webContents.send("settings:changed");
+      target.webContents.send("launch0:ended", reason);
+    };
+    if (target.webContents.isLoading()) target.webContents.once("did-finish-load", notify);
+    else notify();
+  } catch (e) { /* 無視 */ }
+}
+
+ipcMain.handle("launch0:open", () => {
+  if (remoteActive) { focusLaunch0IfActive(); return true; }
+  try {
+    openLaunch0();
+  } catch (e) {
+    // 開けなかったときは、状態を元に戻して画面1を表示する
+    try { closeLaunch0("error", { force: true }); } catch (e2) { /* 無視 */ }
+    return false;
+  }
+  return true;
+});
+ipcMain.handle("launch0:init", (event) => {
+  if (!isLaunch0Sender(event)) return null;
+  // 画面が（何かの理由で）読み込み直された場合、前の状態は失われているので、動いている通信は安全のため止める
+  if (remote && remote.status().running) { try { remote.shutdown("closed"); } catch (e) { /* 無視 */ } }
+  return { locked: launch0Locked };
+});
+ipcMain.handle("launch0:setLock", (event, flag) => {
+  if (!isLaunch0Sender(event)) return false;
+  launch0Locked = !!flag;
+  try { launch0Window.setAlwaysOnTop(launch0Locked, launch0Locked ? "screen-saver" : "normal"); } catch (e) { /* 無視 */ }
+  return launch0Locked;
+});
+ipcMain.handle("launch0:close", (event, reason) => {
+  if (!isLaunch0Sender(event)) return false;
+  // 操作の実行中は、完了するまで閉じられない
+  if (remote && remote.isBusy()) return false;
+  const r = reason === "cancel" ? "cancel" : "user-pc";
+  setImmediate(() => closeLaunch0(r));
+  return true;
+});
+ipcMain.handle("remote:start", async (event, args) => {
+  if (!isLaunch0Sender(event)) return { error: "denied" };
+  try {
+    return await ensureRemote().start(args || {});
+  } catch (e) {
+    const m = e && e.message ? String(e.message) : "";
+    return { error: m === "no-lan" || m === "tailscale-unavailable" || /^ts-[a-z-]+$/.test(m) ? m : "failed" };
+  }
+});
+// Tailscaleの状態（入っているか・動いているか・このPCのアカウントなど）。画面に出す最小限の情報だけ返す
+ipcMain.handle("launch0:tsStatus", async (event) => {
+  if (!isLaunch0Sender(event)) return null;
+  try {
+    if (!tsClient) tsClient = tailscale.createClient();
+    const st = await tsClient.status();
+    if (!st.ok) return { ok: false, reason: st.reason || "error" };
+    return { ok: true, ip: st.selfIp, selfName: st.selfName, login: st.login, display: st.display, tailnet: st.tailnet };
+  } catch (e) {
+    return { ok: false, reason: "error" };
+  }
+});
+// ---- Windowsファイアウォール：Tailscale用の許可の確認・追加（追加は管理者の確認が出る） ----
+const FW_RULE_NAME = "Launch-K Launch-0 (Tailscale)";
+function fwRuleExists() {
+  return new Promise((resolve) => {
+    if (process.platform !== "win32") return resolve(false);
+    require("child_process").execFile("netsh", ["advfirewall", "firewall", "show", "rule", "name=" + FW_RULE_NAME], { windowsHide: true, timeout: 8000 }, (err) => resolve(!err));
+  });
+}
+ipcMain.handle("launch0:fwCheck", async (event) => {
+  if (!isLaunch0Sender(event)) return null;
+  return { supported: process.platform === "win32", exists: await fwRuleExists() };
+});
+ipcMain.handle("launch0:fwAdd", async (event) => {
+  if (!isLaunch0Sender(event)) return { ok: false };
+  if (process.platform !== "win32") return { ok: false };
+  // このアプリが、Tailscaleの番号帯（100.64.0.0/10）の中だけで受け付ける規則を1つ追加する。固定の文字列だけを使う。
+  const args = [
+    "advfirewall", "firewall", "add", "rule", 'name="' + FW_RULE_NAME + '"', "dir=in", "action=allow", "protocol=TCP",
+    'program="' + process.execPath + '"', "localip=100.64.0.0/10", "remoteip=100.64.0.0/10", "profile=any", "enable=yes",
+  ];
+  const psList = args.map((a) => "'" + String(a).replace(/'/g, "''") + "'").join(",");
+  const cmd = "Start-Process -FilePath netsh -ArgumentList @(" + psList + ") -Verb RunAs -Wait -WindowStyle Hidden";
+  await new Promise((resolve) => {
+    require("child_process").execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cmd], { windowsHide: true, timeout: 60000 }, () => resolve());
+  });
+  return { ok: await fwRuleExists() };
+});
+// ---- スマホから実行する間だけ、Launch-0を前面から外す ----
+// マルチ操作や画面分割は「いま前面にあるウィンドウ」にキーを送る。Launch-0が前面に残っていると、
+// Launch-0自身が分割・移動されてしまうので、実行の間だけ最小化し、終わったら（前面を奪わずに）元に戻す。
+ipcMain.handle("launch0:execMode", async (event, on) => {
+  if (!isLaunch0Sender(event)) return false;
+  const win = launch0Window;
+  if (!win || win.isDestroyed()) return false;
+  try {
+    if (on) {
+      launch0ExecDepth += 1;
+      if (launch0ExecDepth === 1) {
+        launch0ExecRestore = { top: launch0Locked, minimized: win.isMinimized() };
+        win.setAlwaysOnTop(false);
+        if (!win.isMinimized()) win.minimize();
+        await waitMs(180); // 最小化が反映され、前面が元のアプリに戻るのを待つ
+        rememberForegroundWindowAsExternal();
+      }
+    } else {
+      launch0ExecDepth = Math.max(0, launch0ExecDepth - 1);
+      if (launch0ExecDepth === 0 && launch0ExecRestore) {
+        const r = launch0ExecRestore;
+        launch0ExecRestore = null;
+        if (!r.minimized) win.showInactive();
+        if (r.top) win.setAlwaysOnTop(true, "screen-saver");
+      }
+    }
+  } catch (e) { /* 無視 */ }
+  return true;
+});
+ipcMain.handle("remote:stop", (event) => {
+  if (!isLaunch0Sender(event)) return false;
+  if (remote) remote.shutdown("closed");
+  return true;
+});
+ipcMain.handle("remote:approve", (event, ok) => (isLaunch0Sender(event) && remote ? remote.approve(!!ok) : false));
+ipcMain.handle("remote:pause", (event, flag) => { if (isLaunch0Sender(event) && remote) remote.pause(!!flag); return true; });
+ipcMain.handle("remote:extend", (event) => { if (isLaunch0Sender(event) && remote) remote.extend(); return true; });
+// 操作の実行中は切断できない。切断した（またはできる）ときtrue、実行中のため断ったときfalse
+ipcMain.handle("remote:disconnect", (event) => (isLaunch0Sender(event) && remote ? remote.disconnect("user-pc") : false));
+ipcMain.on("remote:tapResult", (event, seq, ok, msg) => {
+  if (!isLaunch0Sender(event) || !remote || !Number.isInteger(seq)) return;
+  remote.tapResult(seq, !!ok, typeof msg === "string" ? msg : "");
+});
+ipcMain.on("remote:pushState", (event, state) => {
+  if (!isLaunch0Sender(event) || !remote || !state || typeof state !== "object") return;
+  const pick = (v) => (v === true ? true : v === false ? false : null);
+  remote.pushState({ speaker: pick(state.speaker), mic: pick(state.mic) });
+});
+// 画像アイコンを、スマホ用に小さなPNGにして返す（保存されているボタンに設定された画像だけ）
+ipcMain.handle("launch0:iconData", async (event, tileId) => {
+  if (!isLaunch0Sender(event)) return "";
+  try {
+    const t = loadTiles().find((x) => x && x.id === tileId);
+    const v = t && t.icon && t.icon.kind === "image" ? t.icon.value : "";
+    if (typeof v !== "string" || !v) return "";
+    if (v.startsWith("data:image/")) return v.length < 700000 ? v : "";
+    const ext = path.extname(v).toLowerCase();
+    if (ext === ".gif" || ext === ".webp") {
+      const st = fs.statSync(v);
+      if (st.size > 500 * 1024) return "";
+      return "data:image/" + ext.slice(1) + ";base64," + fs.readFileSync(v).toString("base64");
+    }
+    const img = nativeImage.createFromPath(v);
+    if (!img || img.isEmpty()) return "";
+    const sz = img.getSize();
+    const out = sz.width > 160 ? img.resize({ width: 160, quality: "good" }) : img;
+    return "data:image/png;base64," + out.toPNG().toString("base64");
+  } catch (e) {
+    return "";
+  }
+});
+
 let lastHotkeySignature = null;
 let lastHotkeyFailed = [];
 function hotkeyMapKey(accelerator) {
@@ -2339,6 +2713,7 @@ function unregisterAllHotkeys() {
   lastHotkeyFailed = [];
 }
 ipcMain.handle("hotkeys:register", (event, list) => {
+  if (remoteActive) return []; // スマホ接続中は、起動用ショートカットキー（グローバル）を登録しない
   const clean = [];
   const failed = [];
   const seen = new Set();
@@ -2529,7 +2904,8 @@ ipcMain.handle("capture:fullScreenshot", async (event) => {
   const callerWin = BrowserWindow.fromWebContents(event.sender);
   const refWin = (callerWin && !callerWin.isDestroyed()) ? callerWin : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
   const display = refWin ? screen.getDisplayMatching(refWin.getBounds()) : screen.getPrimaryDisplay();
-  const hidden = [mainWindow, timerWindow, guideWindow, shortcutsWindow, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
+  // Launch-0（スマホから撮影を実行したとき、前面に出ている）も映り込まないよう隠す
+  const hidden = [mainWindow, timerWindow, guideWindow, shortcutsWindow, launch0Window, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
   try {
     hideTooltip(true);
     hidden.forEach((w) => w.hide());

@@ -59,4 +59,25 @@ contextBridge.exposeInMainWorld("api", {
   // opts.preloadSnap: このマルチ操作に画面分割が含まれるとき、画面分割用C#を先に読み込ませる
   startMultiSession: (opts) => ipcRenderer.invoke("multi:sessionStart", opts),
   endMultiSession: () => ipcRenderer.invoke("multi:sessionEnd"),
+  // ---- Launch-0（スマホ操作）----
+  // l0〜 は Launch-0 のウィンドウからの呼び出しだけを main.js が受け付ける（他の画面からは無視される）
+  openLaunch0: () => ipcRenderer.invoke("launch0:open"),
+  onLaunch0Ended: (callback) => ipcRenderer.on("launch0:ended", (e, reason) => callback(reason)),
+  l0Init: () => ipcRenderer.invoke("launch0:init"),
+  l0Start: (args) => ipcRenderer.invoke("remote:start", args),
+  l0Stop: () => ipcRenderer.invoke("remote:stop"),
+  l0Approve: (ok) => ipcRenderer.invoke("remote:approve", !!ok),
+  l0Pause: (flag) => ipcRenderer.invoke("remote:pause", !!flag),
+  l0Extend: () => ipcRenderer.invoke("remote:extend"),
+  l0Disconnect: () => ipcRenderer.invoke("remote:disconnect"),
+  l0TapResult: (seq, ok, msg) => ipcRenderer.send("remote:tapResult", seq, !!ok, String(msg || "")),
+  l0PushState: (state) => ipcRenderer.send("remote:pushState", state),
+  l0SetLock: (flag) => ipcRenderer.invoke("launch0:setLock", !!flag),
+  l0Close: (reason) => ipcRenderer.invoke("launch0:close", String(reason || "cancel")),
+  l0IconData: (tileId) => ipcRenderer.invoke("launch0:iconData", String(tileId || "")),
+  l0TsStatus: () => ipcRenderer.invoke("launch0:tsStatus"),
+  l0FwCheck: () => ipcRenderer.invoke("launch0:fwCheck"),
+  l0FwAdd: () => ipcRenderer.invoke("launch0:fwAdd"),
+  l0ExecMode: (on) => ipcRenderer.invoke("launch0:execMode", !!on),
+  onRemoteEvent: (callback) => ipcRenderer.on("remote:event", (e, evt) => callback(evt)),
 });

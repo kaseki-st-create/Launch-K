@@ -233,13 +233,6 @@
     box-shadow: 0 0 0 1px var(--icon-ring-color),
                 inset 0 0 0 1px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(255,255,255,0.10);
   }
-  /* ハンバーガーメニュー→ボタンの見た目「CSSアイコンに枠を付ける」がオンのとき、CSSアイコン
-     （種類が既定・CSSのもの）に、塗りつぶしの有無に関わらず同じ枠を付ける。色・太さは画面ごとの設定
-     （--css-frame-color／--css-frame-width）。枠の外側に描くので、アイコンの中身は隠れない。
-     囲み線（--icon-ring-color）や内側の薄い線はこの枠に置き換わるため、二重に見えない。 */
-  body.css-frame-on .tile-icon.css-icon {
-    box-shadow: 0 0 0 var(--css-frame-width, 2px) var(--css-frame-color, rgb(217, 217, 217));
-  }
   .tile-icon img { width: var(--icon-size); height: var(--icon-size); border-radius: var(--icon-radius); object-fit: cover; }
   .tile-icon-emoji, .tile-icon > span {
     /* グリフの色がテーマ色に近くても読み取れるよう、常に軽い縁取りを付ける。 */
@@ -438,6 +431,9 @@
   .icon-group-caret.open { transform: rotate(180deg); }
 
   .settings-section { margin-bottom: 10px; }
+  /* ハンバーガーメニューの各項目を囲む枠。高さは固定せず中身に合わせて伸びる（テーマで画像背景を選んで項目が増えても、枠も一緒に伸びる） */
+  .settings-section.boxed { border: 1.5px solid var(--box-border, rgba(255,255,255,0.30)); background: var(--box-bg, rgba(255,255,255,0.04)); border-radius: 12px; padding: 10px 12px 12px; margin-bottom: 12px; }
+  .settings-section.boxed h3 { color: var(--text); font-weight: 700; font-size: 13px; margin-bottom: 8px; }
   .settings-section h3 { font-size: 12px; letter-spacing: 0.5px; color: var(--text-muted); margin: 0 0 6px; }
   #settingsBody .type-row { margin-bottom: 8px; }
   #settingsBody .page-tabs { margin-bottom: 8px; }
@@ -480,12 +476,62 @@
     display: flex; align-items: center; justify-content: center;
   }
   .page-tab.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+
+  /* ---- Launch-0（スマホ操作）の画面。通常のボタン一覧は隠して、専用の表示だけを出す ---- */
+  #l0Root { display: none; }
+  body.launch0-mode #app, body.launch0-mode #hamburgerBtn { display: none; }
+  body.launch0-mode::before { display: none !important; }
+  body.launch0-mode .lock-btn { right: 14px; }
+  body.launch0-mode #l0Root {
+    display: block; position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 10;
+    padding: 14px 14px 12px 14px; overflow-y: auto; color: var(--text);
+  }
+  .l0-title { font-size: 17px; font-weight: 700; margin: 2px 64px 12px 0; }
+  .l0-title span { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-left: 6px; }
+  .l0-sub { font-size: 12px; line-height: 1.7; color: var(--text-muted); margin-bottom: 8px; }
+  .l0-sub b { color: var(--text); }
+  .l0-acct { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
+  .l0-eye { border: 1px solid var(--border); background: transparent; color: var(--text-muted); border-radius: 8px; padding: 1px 8px; font-size: 11px; line-height: 1.6; cursor: pointer; font-family: inherit; }
+  .l0-eye:hover { color: var(--text); background: var(--panel-alt-solid, rgba(255,255,255,0.06)); }
+  .l0-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .l0-pick { display: flex; flex-direction: column; align-items: flex-start; min-width: 96px; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-alt-solid); color: var(--text); font-size: 14px; font-weight: 700; font-family: inherit; cursor: pointer; }
+  .l0-pick span { font-size: 11px; font-weight: 500; color: var(--text-muted); margin-top: 2px; }
+  .l0-pick.sel { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+  .l0-pick.sel span { color: var(--accent-contrast); opacity: 0.8; }
+  .l0-notice { font-size: 12px; line-height: 1.6; color: #FFB238; margin: 6px 0; }
+  .l0-wait { display: flex; align-items: flex-start; margin-bottom: 8px; }
+  .l0-qrbox { flex: none; margin-right: 14px; background: #fff; border-radius: 8px; padding: 4px; line-height: 0; }
+  .l0-qrbox img { image-rendering: pixelated; display: block; } /* 3px/マスのままの大きさ（約110px）。拡大縮小しない方が読み取りやすい */
+  .l0-side { flex: 1; min-width: 0; }
+  .l0-otp { font-family: ui-monospace, Consolas, monospace; font-size: 24px; font-weight: 400; letter-spacing: 4px; color: var(--text-muted); margin: 2px 0 6px 0; user-select: all; }
+  .l0-card { border: 1px solid var(--border); background: var(--panel-alt-solid); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
+  .l0-big { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+  .l0-status { display: flex; align-items: center; margin-bottom: 10px; font-size: 14px; }
+  .l0-dot { width: 10px; height: 10px; border-radius: 50%; background: #3ED67A; margin-right: 8px; }
+  .l0-dot.paused { background: #FFDE59; }   /* 一時停止中：黄色 */
+  .l0-dot.stalled { background: #FF9F43; }  /* 通信が途切れている：橙（黄色と区別） */
+  .l0-grid { display: flex; flex-wrap: wrap; margin-bottom: 8px; }
+  .l0-grid > div { flex: 1 1 90px; min-width: 90px; border: 1px solid var(--border); background: var(--panel-alt-solid); border-radius: 10px; padding: 8px 10px; margin: 0 8px 8px 0; }
+  .l0-grid span { display: block; font-size: 11px; color: var(--text-muted); }
+  .l0-grid b { font-size: 15px; }
+  .l0-modes { display: flex; gap: 8px; margin-bottom: 8px; }
+  .l0-mode { flex: 1; display: flex; flex-direction: column; align-items: flex-start; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-alt-solid); color: var(--text); font-size: 14px; font-weight: 700; font-family: inherit; cursor: pointer; text-align: left; }
+  .l0-mode span { font-size: 11px; font-weight: 500; color: var(--text-muted); margin-top: 2px; }
+  .l0-mode.sel { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+  .l0-mode.sel span { color: var(--accent-contrast); opacity: 0.8; }
+  .l0-ok-note { font-size: 12px; font-weight: 700; color: #3ED67A; margin: 4px 0; }
+  .l0-row { display: flex; gap: 8px; margin: 4px 0 8px; }
+  .l0-row .btn { padding: 6px 12px; font-size: 12px; }
+  .l0-warn { color: #14161B; font-size: 12px; font-weight: 700; padding: 8px 10px; border-radius: 10px; margin-bottom: 8px; }
+  .l0-warn .btn { margin-left: 8px; padding: 4px 10px; background: #14161B; color: #FFB238; }
 </style>
 </head>
 <body>
   <div id="dragStrip"></div>
   <button class="lock-btn" id="lockBtn" title="常に最前面に表示">🔓</button>
   <button class="hamburger-btn" id="hamburgerBtn">☰</button>
+
+  <div id="l0Root"></div>
 
   <div id="app">
     <div class="header">
@@ -527,6 +573,7 @@
 
   <script src="vendor/qrcode.js"></script>
   <script src="vendor/qrcode_UTF8.js"></script>
+  <script src="launch0.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

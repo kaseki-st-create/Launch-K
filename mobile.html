@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="format-detection" content="telephone=no">
+<meta name="color-scheme" content="dark">
+<meta name="lk-ticket" content="__LAUNCHK_TICKET__">
+<meta name="lk-mode" content="__LAUNCHK_MODE__">
+<link rel="icon" href="data:,">
+<title>Launch-K リモート</title>
+<style>
+/* ============================================================
+   Launch-K スマホ操作ページ（単一ファイル：CSS・JSは全部ここ）
+   ・Electron専用のAPI（require / ipcRenderer / window.api）は一切使わない
+   ・高さは 100vh / dvh を使わず、JSで window.innerHeight を測って決める
+   ・古いSafariで止まらないよう、新しい構文（?. ?? replaceAll など）は使わない
+   ============================================================ */
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body {
+  margin: 0; padding: 0; height: 100%; overflow: hidden;
+  background: #14161B; color: #EDEFF2;
+  font-family: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+  touch-action: manipulation;
+}
+#root {
+  position: fixed; left: 0; top: 0; width: 100%; height: 100%;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  background: linear-gradient(180deg, var(--bg1, #14161B) 0%, var(--bg2, #111319) 100%);
+  color: var(--text, #EDEFF2);
+}
+.screen { display: none; width: 100%; height: 100%; }
+.screen.on { display: flex; }
+/* 縦中央に置く。ただし内容が画面より高い（横画面など）ときは上が切れず、スクロールできるようにする */
+.center { flex-direction: column; align-items: center; justify-content: flex-start; padding: 24px; text-align: center; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.center::before { content: ""; flex: none; margin-bottom: auto; }
+.center::after { content: ""; flex: none; margin-top: auto; }
+.card { width: 100%; max-width: 420px; text-align: left; flex: none; }
+@media (orientation: landscape) and (max-height: 520px) {
+  .center { padding: 10px 24px; }
+  h1 { font-size: 17px; margin-bottom: 6px; }
+  p, li { font-size: 13px; line-height: 1.5; margin-bottom: 4px; }
+  .btn { padding: 11px 16px; margin-top: 8px; }
+  input.otp { font-size: 24px; padding: 8px; }
+}
+h1 { font-size: 20px; margin: 0 0 12px; }
+p, li { font-size: 14px; line-height: 1.7; color: #C7CCD6; margin: 0 0 8px; }
+ul { margin: 0 0 14px; padding-left: 20px; }
+.small { font-size: 11px; color: #8B92A0; }
+.btn {
+  display: block; width: 100%; border: none; border-radius: 14px; padding: 15px 16px; margin-top: 12px;
+  font-size: 16px; font-weight: 700; font-family: inherit; color: #14161B; background: #FFB238;
+}
+.btn:disabled { opacity: 0.4; }
+.btn.sub { background: #2B303A; color: #EDEFF2; }
+.btn.danger { background: #FF6B5E; }
+.check { display: flex; align-items: flex-start; font-size: 14px; color: #EDEFF2; margin: 14px 0 4px; line-height: 1.5; }
+.check input { width: 22px; height: 22px; margin: 1px 10px 0 0; flex: none; }
+input.otp {
+  width: 100%; font-size: 30px; letter-spacing: 8px; text-align: center; padding: 14px 8px; border-radius: 14px;
+  border: 2px solid #3B414D; background: #1D2129; color: #EDEFF2; font-family: ui-monospace, Menlo, monospace;
+  -webkit-user-select: text; user-select: text; text-transform: lowercase;
+}
+.msg { min-height: 22px; font-size: 13px; color: #FF8A80; margin-top: 10px; }
+.spinner { width: 34px; height: 34px; border-radius: 50%; border: 4px solid #3B414D; border-top-color: #FFB238; animation: spin 0.9s linear infinite; margin: 0 auto 16px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- 操作画面 ---- */
+#s-op { flex-direction: column; position: relative; }
+#bar { flex: none; height: 44px; display: flex; align-items: center; padding: 0 10px; }
+#bar > * + * { margin-left: 10px; }
+#menuBtn {
+  width: 40px; height: 36px; border-radius: 10px; border: 1px solid var(--border, #2B303A);
+  background: var(--panelSolid, rgba(29,33,41,0.76)); color: var(--text, #EDEFF2); font-size: 20px; flex: none;
+}
+#title { flex: 1; min-width: 0; font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#net { font-size: 11px; color: #FF9F43; display: none; flex: none; }
+#pauseDot { display: none; width: 10px; height: 10px; border-radius: 50%; background: #FFDE59; flex: none; }
+#pauseDot.on { display: block; }
+#net.on { display: block; }
+#gridArea { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 4px 10px; }
+#grid { display: grid; }
+.cellEmpty { visibility: hidden; }
+.tile {
+  position: relative; width: 100%; height: 100%; padding: 0; border: none; margin: 0; overflow: visible;
+  display: flex; align-items: center; justify-content: center; color: inherit; font: inherit;
+  background: transparent; /* 枠なし：ボタン（アイコンの面）だけを大きく見せる */
+  transition: transform 90ms ease, filter 120ms ease; border-radius: 18px;
+}
+.tile { touch-action: none; }
+.tile:active { transform: scale(0.94); filter: brightness(0.88); }
+/* 長押しの途中：0.2秒たつと、枠が少しずつ白く縁取られていく（0.75秒で名前が出る） */
+.tile.charging { animation: lpcharge 550ms linear forwards; }
+@keyframes lpcharge { from { box-shadow: inset 0 0 0 0 rgba(255,255,255,0); } to { box-shadow: inset 0 0 0 6px rgba(255,255,255,0.65); } }
+.tile.lp-done { animation: lpdone 260ms ease; }
+@keyframes lpdone { 0% { transform: scale(1.07); } 100% { transform: scale(1); } }
+#nameTip { position: fixed; z-index: 15; display: none; max-width: 78%; padding: 8px 12px; border-radius: 12px; background: rgba(20,22,27,0.97); color: #fff; border: 1px solid #4B515D; font-size: 14px; font-weight: 700; line-height: 1.4; text-align: center; pointer-events: none; word-break: break-word; }
+#nameTip.on { display: block; }
+#nameTip small { display: block; font-weight: 500; font-size: 11px; color: #FF9F43; margin-top: 2px; }
+#s-op.multibusy .tile { opacity: 0.4; }                       /* マルチ操作の実行中は、ほかのボタンを押せない */
+.tile.running { opacity: 1 !important; animation: runpulse 1s ease-in-out infinite; } /* 実行中のボタン */
+@keyframes runpulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.55); } }
+.btn.off { opacity: 0.45; }
+.tile.ok { animation: okflash 420ms ease; }
+.tile.ng { animation: ngflash 520ms ease; }
+@keyframes okflash { 0% { filter: brightness(1.8); } 100% { filter: brightness(1); } }
+@keyframes ngflash { 0% { box-shadow: inset 0 0 0 4px #FF6B5E; } 100% { box-shadow: inset 0 0 0 0 #FF6B5E; } }
+.tile.blocked { opacity: 0.38; }
+.chip { display: flex; align-items: center; justify-content: center; overflow: hidden; pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(255,255,255,0.10); }
+.chip svg { width: 100%; height: 100%; display: block; }
+.chip .ico { display: flex; align-items: center; justify-content: center; width: 68%; height: 68%; }
+.chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chip .emoji { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; text-align: center; line-height: 1.05; word-break: break-word; overflow: hidden; text-shadow: 0 1px 1px rgba(0,0,0,0.3); }
+.lockmark { position: absolute; right: 6px; top: 4px; font-size: 14px; }
+#pager { flex: none; display: flex; align-items: center; }
+#pager.off { visibility: hidden; }
+#pager button {
+  width: 40px; height: 34px; border-radius: 10px; border: 1px solid var(--border, #2B303A); padding: 0;
+  background: var(--panelSolid, rgba(29,33,41,0.76)); color: var(--text, #EDEFF2); font-size: 13px;
+}
+#pager button:disabled { opacity: 0.35; }
+#pcount { min-width: 44px; text-align: center; font-size: 13px; font-weight: 700; }
+#banner { position: absolute; left: 10px; right: 10px; top: 48px; z-index: 5; display: none; padding: 10px 12px; border-radius: 12px; background: #FFB238; color: #14161B; font-size: 13px; font-weight: 700; }
+#banner.on { display: block; }
+#banner button { margin-left: 8px; border: none; border-radius: 8px; padding: 6px 10px; font-weight: 700; background: #14161B; color: #FFB238; }
+#toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 86%; z-index: 6; display: none;
+  background: rgba(20,22,27,0.92); color: #EDEFF2; border: 1px solid #3B414D; padding: 9px 14px; border-radius: 12px; font-size: 13px; text-align: center; }
+#toast.on { display: block; }
+#s-op.paused #gridArea { opacity: 0.45; } /* 一時停止中も、長押しで名前は見られる（押しても実行はしない） */
+
+/* ---- ハンバーガー ---- */
+#drawerBack { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: none; z-index: 20; }
+#drawerBack.on { display: block; }
+#drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 78%; max-width: 320px; z-index: 21; background: #1D2129; color: #EDEFF2;
+  padding: calc(env(safe-area-inset-top, 0px) + 14px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px) 16px;
+  transform: translateX(105%); transition: transform 180ms ease; display: flex; flex-direction: column; visibility: hidden;
+}
+#drawer.on { transform: translateX(0); visibility: visible; box-shadow: -10px 0 30px rgba(0,0,0,0.4); }
+#drawer h2 { font-size: 12px; color: #8B92A0; margin: 8px 0 8px; font-weight: 600; letter-spacing: 0.5px; }
+#pageList { overflow-y: auto; flex: 1 1 auto; }
+.pgbtn { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 14px 14px; margin-bottom: 8px; border-radius: 12px; border: 1px solid #2B303A; background: #262B35; color: #EDEFF2; font-size: 16px; font-family: inherit; }
+.pgbtn.cur { background: #FFB238; color: #14161B; border-color: #FFB238; font-weight: 700; }
+.confirmBack { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 30; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; padding: 24px; }
+.confirmBack.on { display: flex; }
+.confirmBox { width: 100%; max-width: 340px; background: #1D2129; border-radius: 18px; padding: 20px; }
+#err { position: fixed; left: 0; right: 0; bottom: 0; z-index: 99; max-height: 38%; overflow: auto; background: #5A1B16; color: #fff; font-size: 11px; line-height: 1.4; padding: 8px 10px; display: none; -webkit-user-select: text; user-select: text; white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+<div id="root">
+  <!-- 読み込み中：JSが動いていれば、すぐに次の画面へ切り替わる（ここが出たままならJSの問題） -->
+  <div id="s-load" class="screen center on">
+    <div class="spinner"></div>
+    <div>読み込み中…</div>
+    <div class="small" id="loadInfo" style="margin-top:12px;">Launch-K リモート v__LAUNCHK_VERSION__</div>
+    <noscript><p>JavaScriptが無効です。Safariの設定でJavaScriptを有効にしてください。</p></noscript>
+  </div>
+
+  <div id="s-caution" class="screen center">
+    <div class="card">
+      <h1>📱 Launch-K リモート操作</h1>
+      <p>このスマホから、PCのLaunch-Kのボタンを押せるようにします。</p>
+      <ul id="cautionLan">
+        <li>押したボタンは、PCで実際に実行されます。</li>
+        <li>PCと同じWi-Fiのときだけ使えます。公共のWi-Fiでは使わないでください。</li>
+        <li>通信は暗号化されません。他の人が使うWi-Fiでは使用しないでください。</li>
+        <li>動作の実行中は、完了するまで切断できません。</li>
+        <li>終わったら、メニュー（☰）の「接続を切断」を押してください。</li>
+      </ul>
+      <ul id="cautionTs" style="display:none;">
+        <li>押したボタンは、PCで実際に実行されます。</li>
+        <li>この通信は、Tailscaleで暗号化されています。PCと同じアカウントの端末だけが接続できます。</li>
+        <li>使っている間は、iPhoneのTailscaleをオンのままにしてください。</li>
+        <li>動作の実行中は、完了するまで切断できません。</li>
+        <li>終わったら、メニュー（☰）の「接続を切断」を押してください。</li>
+      </ul>
+      <label class="check"><input type="checkbox" id="chk"><span>上記を理解しました</span></label>
+      <button class="btn" id="cautionNext" disabled>次へ</button>
+      <p class="small" style="margin-top:14px;" id="diag"></p>
+    </div>
+  </div>
+
+  <div id="s-otp" class="screen center">
+    <div class="card">
+      <h1>パスワードを入力</h1>
+      <p>PCに表示されている、6文字のパスワードを入力してください。パスワードは30秒ごとに新しくなります。</p>
+      <input class="otp" id="otp" type="text" inputmode="text" maxlength="6" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="••••••">
+      <div class="msg" id="otpMsg"></div>
+      <button class="btn" id="otpGo">接続する</button>
+    </div>
+  </div>
+
+  <div id="s-wait" class="screen center">
+    <div class="spinner"></div>
+    <div style="font-size:16px;font-weight:700;">PCでの許可を待っています…</div>
+    <p style="margin-top:10px;">PCの画面に出ている確認で「許可」を押してください。</p>
+    <button class="btn sub" id="waitCancel" style="max-width:260px;">やめる</button>
+  </div>
+
+  <div id="s-op" class="screen">
+    <div id="bar"><button id="menuBtn" aria-label="メニュー">☰</button><div id="title"></div><span id="pauseDot" title="一時停止中"></span><div id="net">再接続中…</div><div id="pager" class="off"><button id="prevBtn" aria-label="前へ">◀</button><div id="pcount">1 / 1</div><button id="nextBtn" aria-label="次へ">▶</button></div></div>
+    <div id="banner"></div>
+    <div id="gridArea"><div id="grid"></div></div>
+    <div id="toast"></div>
+  </div>
+
+  <div id="s-end" class="screen center">
+    <div class="card">
+      <h1 id="endTitle">接続が終了しました</h1>
+      <p id="endText"></p>
+      <p class="small">もう一度使うときは、PCのLaunch-0でQRコードを読み取ってください。このページは閉じて構いません。</p>
+    </div>
+  </div>
+</div>
+
+<div id="drawerBack"></div>
+<div id="drawer">
+  <h2>画面を切り替え</h2>
+  <div id="pageList"></div>
+  <button class="btn danger" id="disconnectBtn">接続を切断</button>
+</div>
+<div class="confirmBack" id="confirmBack">
+  <div class="confirmBox">
+    <div style="font-size:16px;font-weight:700;margin-bottom:6px;">接続を切断しますか？</div>
+    <p>PCとの接続を終了します。</p>
+    <button class="btn danger" id="confirmYes">切断する</button>
+    <button class="btn sub" id="confirmNo">キャンセル</button>
+  </div>
+</div>
+<div id="nameTip"></div>
+<div id="err"></div>
+
+<script>
+// ---- 何があっても原因が見えるように：エラーを画面の下に出す ----
+(function () {
+  var box = document.getElementById("err");
+  var lines = [];
+  function show(msg) {
+    lines.push(String(msg));
+    if (lines.length > 4) lines.shift();
+    box.textContent = "エラー（Launch-K v__LAUNCHK_VERSION__）\n" + lines.join("\n");
+    box.style.display = "block";
+  }
+  window.__lkShowError = show;
+  window.onerror = function (message, src, line, col) { show(message + " @" + line + ":" + col); };
+  window.addEventListener("unhandledrejection", function (e) { show("Promise: " + (e && e.reason && (e.reason.message || e.reason))); });
+})();
+
+(function () {
+  "use strict";
+  var VERSION = "__LAUNCHK_VERSION__";
+  var PING_MS = 4000;
+  var TAP_TIMEOUT_MS = 130000; // マルチ操作など、長い操作の完了を待つ上限（PC側の上限120秒＋余裕）
+  // 画面の並び（変更不可）：縦画面＝3列×6行、横画面＝6列×3行
+  var PORTRAIT = { cols: 3, rows: 6 };
+  var LANDSCAPE = { cols: 6, rows: 3 };
+
+  function $(id) { return document.getElementById(id); }
+  function param(name) {
+    var m = new RegExp("[?&]" + name + "=([^&]*)").exec(location.search);
+    return m ? decodeURIComponent(m[1]) : "";
+  }
+  function storeGet(k) { try { return window.sessionStorage.getItem(k); } catch (e) { return null; } }
+  function storeSet(k, v) { try { window.sessionStorage.setItem(k, v); } catch (e) { /* 無視 */ } }
+  function storeDel(k) { try { window.sessionStorage.removeItem(k); } catch (e) { /* 無視 */ } }
+
+  var K = param("k");
+  // サーバーが埋め込んだ接続方法（"tailscale" か "lan"）
+  var MODE = "lan";
+  (function () {
+    var m = document.querySelector('meta[name="lk-mode"]');
+    if (m && m.getAttribute("content") === "tailscale") MODE = "tailscale";
+  })();
+  var execBusy = false, execMulti = false; // PCで実行中の操作／そのうちマルチ操作があるか
+  // QRで開いたとき、サーバーがこのページに埋め込んだ「パスワード入力用の許可証」（置き換え文字は、置き換えられないよう分けて書く）
+  var TICKET = "";
+  (function () {
+    var m = document.querySelector('meta[name="lk-ticket"]');
+    var v = m ? m.getAttribute("content") : "";
+    if (v && v !== "__LAUNCHK_" + "TICKET__") TICKET = v;
+  })();
+  var sid = param("sid") || "";
+  var es = null, pingTimer = null, relayoutTimer = null, toastTimer = null, netTimer = null;
+  var snap = null;       // PCから受け取った表示用データ
+  var curPage = 0;       // snap.pages の添字
+  var subPage = 0;
+  var seq = 0;
+  var pendingTaps = {};
+  var paused = false;
+  var ended = false;
+  var wakeLock = null;
+  var lastEventAt = 0;
+  var lastOkAt = Date.now(); // PCから最後に応答があった時刻
+  var lostShown = false, probing = false, wdTimer = null;
+  var bannerKind = "";
+  var STALE_MS = 25000, LOST_MS = 75000;
+  var LONGPRESS_MS = 750;    // これ以上押し続けると「長押し」＝名前を表示する（それより短ければ通常のタップ）
+  var CHARGE_AFTER_MS = 200; // 長押しの途中経過の表示を始めるまで
+  var MOVE_LIMIT = 12;       // 押している間に指がこれ以上動いたら、タップでも長押しでもない（取り消し）
+  var press = null, tipTimer = null;
+
+  var REASONS = {
+    "user-pc": "PCで切断されました。",
+    "user-phone": "切断しました。",
+    "timeout": "通信が途切れたため、切断しました。",
+    "idle": "しばらく操作がなかったため、切断しました。",
+    "maxtime": "最大の接続時間に達したため、切断しました。",
+    "phone-hidden": "画面を長い間閉じていたため、切断しました。",
+    "pc-sleep": "PCがスリープしたため、切断しました。",
+    "pc-lock": "PCの画面がロックされたため、切断しました。",
+    "network": "PCのネットワークが変わったため、切断しました。",
+    "closed": "PCでLaunch-0が閉じられました。",
+    "app-quit": "Launch-Kが終了しました。",
+    "abuse": "操作が多すぎたため、切断しました。",
+    "denied": "PCで許可されませんでした。",
+    "approval-timeout": "PCで許可されなかったため、時間切れになりました。",
+    "lost": "通信が一定時間途切れたため、切断しました。",
+    "identity": "この端末を、PCと同じアカウントの端末と確認できなくなったため、切断しました。",
+    "tailscale-down": "PCのTailscaleが止まったため、切断しました。",
+    "error": "PC側に問題が起きたため、切断しました。",
+    "session": "この接続は終了しています（通信が途切れたなどのため）。"
+  };
+
+  function showScreen(id) {
+    var list = document.querySelectorAll(".screen");
+    for (var i = 0; i < list.length; i++) list[i].className = list[i].className.replace(/\bon\b/g, "").replace(/\s+$/, "");
+    var el = $(id);
+    el.className = el.className + " on";
+  }
+  function setText(id, t) { $(id).textContent = t; }
+
+  // ---------- 色・SVGの安全チェック ----------
+  var COLOR_RE = /^(#[0-9a-fA-F]{3,8}|rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(,\s*[\d.]+\s*)?\))$/;
+  function safeColor(c, fb) { return typeof c === "string" && COLOR_RE.test(c) ? c : fb; }
+  function safeSvg(s) {
+    if (typeof s !== "string" || s.indexOf("<svg") !== 0) return "";
+    if (/<script|\son[a-z]+\s*=|javascript:|<foreignObject|<iframe/i.test(s)) return "";
+    return s;
+  }
+
+  // ---------- 最初の画面 ----------
+  function init() {
+    setText("diag", "v" + VERSION + " · " + window.innerWidth + "×" + window.innerHeight);
+    layoutRoot();
+    window.addEventListener("resize", scheduleRelayout);
+    window.addEventListener("orientationchange", function () { scheduleRelayout(); setTimeout(scheduleRelayout, 200); setTimeout(scheduleRelayout, 600); setTimeout(scheduleRelayout, 1200); });
+    // iPhoneのSafariは、回転直後に画面の大きさを古いまま返すことがあるので、確定したときにもう一度測り直す
+    window.addEventListener("pageshow", scheduleRelayout);
+    if (window.visualViewport && window.visualViewport.addEventListener) window.visualViewport.addEventListener("resize", scheduleRelayout);
+    try {
+      var mq = window.matchMedia("(orientation: landscape)");
+      if (mq.addEventListener) mq.addEventListener("change", function () { scheduleRelayout(); setTimeout(scheduleRelayout, 300); });
+      else if (mq.addListener) mq.addListener(function () { scheduleRelayout(); setTimeout(scheduleRelayout, 300); });
+    } catch (e) { /* 無視 */ }
+    document.addEventListener("gesturestart", function (e) { e.preventDefault(); });
+    document.addEventListener("visibilitychange", onVisibility);
+
+    installPress();
+    $("cautionLan").style.display = MODE === "tailscale" ? "none" : "";
+    $("cautionTs").style.display = MODE === "tailscale" ? "" : "none";
+    $("chk").addEventListener("change", function () { $("cautionNext").disabled = !$("chk").checked; });
+    $("cautionNext").addEventListener("click", function () { showScreen("s-otp"); setTimeout(function () { try { $("otp").focus(); } catch (e) { /* 無視 */ } }, 50); });
+    $("otpGo").addEventListener("click", doAuth);
+    $("otp").addEventListener("keydown", function (e) { if (e.key === "Enter") doAuth(); });
+    $("waitCancel").addEventListener("click", function () { post("/api/bye", {}).then(function () { finish("user-phone"); }, function () { finish("user-phone"); }); });
+    $("menuBtn").addEventListener("click", function () { openDrawer(true); });
+    $("drawerBack").addEventListener("click", function () { openDrawer(false); });
+    $("prevBtn").addEventListener("click", function () { setSub(subPage - 1); });
+    $("nextBtn").addEventListener("click", function () { setSub(subPage + 1); });
+    $("disconnectBtn").addEventListener("click", function () {
+      openDrawer(false);
+      // 操作の実行中は、完了するまで切断できない
+      if (isBusyNow()) { toast("動作が完了するまで切断できません"); return; }
+      $("confirmBack").className = "confirmBack on";
+    });
+    $("confirmNo").addEventListener("click", function () { $("confirmBack").className = "confirmBack"; });
+    $("confirmYes").addEventListener("click", function () {
+      $("confirmBack").className = "confirmBack";
+      if (isBusyNow()) { toast("動作が完了するまで切断できません"); return; }
+      post("/api/bye", {}).then(function (j) {
+        if (j && j.error === "busy") { execBusy = true; applyExec(); toast("動作が完了するまで切断できません"); return; } // PC側で実行中だった
+        finish("user-phone");
+      }, function () { finish("user-phone"); });
+    });
+
+    if (sid) {
+      // ページを再読み込みした場合など：続きから
+      connect();
+    } else if (TICKET || K) {
+      showScreen("s-caution");
+    } else {
+      showEnd("このURLは使えません", "PCのLaunch-0に表示されたQRコードを、もう一度読み取ってください。");
+    }
+  }
+
+  function layoutRoot() {
+    // 100vhに頼らず、いま見えている高さを直接使う
+    var h = window.innerHeight;
+    $("root").style.height = h + "px";
+    try { window.scrollTo(0, 0); } catch (e) { /* 無視 */ } // 回転やバーの出し入れで、ページ全体がずれたままになるのを戻す
+  }
+  function scheduleRelayout() {
+    clearTimeout(relayoutTimer);
+    relayoutTimer = setTimeout(function () {
+      layoutRoot();
+      // 指で押している最中にボタンを描き直すと、そのタップが消えるので、離すまで待つ
+      if (press && !press.cancelled) { scheduleRelayout(); return; }
+      if (snap && !ended) renderGrid();
+    }, 60);
+  }
+
+  // ---------- 通信 ----------
+  function post(path, body) {
+    var headers = { "Content-Type": "application/json" };
+    if (sid) headers["X-Sid"] = sid;
+    return fetch(path, { method: "POST", headers: headers, body: JSON.stringify(body || {}), cache: "no-store" }).then(function (r) {
+      return r.json().then(function (j) { j.__status = r.status; return j; }, function () { return { ok: false, __status: r.status }; });
+    });
+  }
+
+  function doAuth() {
+    var v = $("otp").value.replace(/\s+/g, "").toLowerCase();
+    if (v.length !== 6) { setText("otpMsg", "6文字で入力してください"); return; }
+    setText("otpMsg", "");
+    $("otpGo").disabled = true;
+    post("/api/auth", { k: TICKET || K, otp: v }).then(function (j) {
+      $("otpGo").disabled = false;
+      if (j && j.ok && j.sid) {
+        sid = j.sid;
+        storeSet("lk_sid", sid);
+        try { history.replaceState(null, "", "/?sid=" + encodeURIComponent(sid)); } catch (e) { /* 無視 */ }
+        $("otp").value = "";
+        connect();
+        return;
+      }
+      var err = j && j.error;
+      if (err === "otp") setText("otpMsg", "パスワードが違います（あと" + j.left + "回）。PCに表示されている最新のものを入力してください");
+      else if (err === "locked") { showEnd("入力を3回間違えました", "安全のため、PCのQRコードとパスワードを作り直しました。QRコードをもう一度読み取ってください。"); }
+      else if (err === "busy") showEnd("使用中です", "すでに別の端末が接続中か、PCが接続を待っていません。");
+      else if (err === "rate") setText("otpMsg", "試行回数が多すぎます。少し待ってからやり直してください");
+      else if (err === "token") showEnd("QRコードの有効期限が切れました", "PCのQRコードは30秒ごとに新しくなります。もう一度、PCに表示されているQRコードを読み取ってください。");
+      else setText("otpMsg", "接続できませんでした");
+    }, function (e) {
+      $("otpGo").disabled = false;
+      setText("otpMsg", "PCに届きません。同じWi-Fiにつながっているか確認してください");
+    });
+  }
+
+  function connect() {
+    ended = false;
+    showScreen("s-wait");
+    openStream();
+    if (pingTimer) clearInterval(pingTimer);
+    pingTimer = setInterval(sendPing, PING_MS);
+    lastOkAt = Date.now(); lostShown = false;
+    if (wdTimer) clearInterval(wdTimer);
+    wdTimer = setInterval(watchdog, 2000);
+    acquireWakeLock();
+  }
+
+  function openStream() {
+    if (es) { try { es.close(); } catch (e) { /* 無視 */ } es = null; }
+    if (typeof EventSource === "undefined") { showEnd("このブラウザでは使えません", "Safariの最新版でお試しください。"); return; }
+    es = new EventSource("/api/events?sid=" + encodeURIComponent(sid));
+    es.onopen = function () { lastEventAt = Date.now(); markOk(); setNet(false); };
+    es.onmessage = function (e) {
+      lastEventAt = Date.now(); markOk(); setNet(false);
+      var m = null;
+      try { m = JSON.parse(e.data); } catch (err) { return; }
+      if (m && m.type) onMessage(m);
+    };
+    es.addEventListener("msg", function (e) {
+      lastEventAt = Date.now(); markOk(); setNet(false);
+      var m = null;
+      try { m = JSON.parse(e.data); } catch (err) { return; }
+      if (m && m.type) onMessage(m);
+    });
+    es.onerror = function () {
+      if (ended) return;
+      setNet(true);
+      // サーバーが拒否した（接続が終わっている）場合は、自動の再接続が止まる
+      if (es && es.readyState === 2) {
+        post("/api/ping", { hidden: document.hidden }).then(function (j) {
+          if (j && j.__status === 401) finish(j.reason || "session");
+        }, function () { /* 通信できない間は待つ */ });
+      }
+    };
+  }
+
+  function setNet(on) {
+    var el = $("net");
+    el.className = on ? "on" : "";
+  }
+
+  function sendPing() {
+    if (ended || !sid) return;
+    post("/api/ping", { hidden: document.hidden }).then(function (j) {
+      if (j && (j.__status === 401 || j.__status === 403)) finish(j.reason || "session");
+      else if (j && j.ok) { markOk(); paused = !!j.paused; applyPaused(); }
+    }, function () { /* 一時的に届かないだけ。サーバー側の判定に任せる */ });
+  }
+  function onVisibility() {
+    if (ended) return;
+    sendPing();
+    if (!document.hidden) { acquireWakeLock(); watchdog(); }
+  }
+  function acquireWakeLock() {
+    try {
+      if (navigator.wakeLock && typeof navigator.wakeLock.request === "function") {
+        navigator.wakeLock.request("screen").then(function (l) { wakeLock = l; }, function () { /* 使えない場合は無視 */ });
+      }
+    } catch (e) { /* 無視 */ }
+  }
+
+  // ---------- 通信が途切れていないかの見張り ----------
+  // 20秒応答がなければ「途切れています」、60秒たつと確認して、届かなければスマホ自身が切断表示にする。
+  function markOk() {
+    lastOkAt = Date.now();
+    if (lostShown) { lostShown = false; if (bannerKind === "lost") hideBanner(); }
+  }
+  function withTimeout(p, ms) {
+    return Promise.race([p, new Promise(function (resolve, reject) { setTimeout(function () { reject(new Error("timeout")); }, ms); })]);
+  }
+  function watchdog() {
+    if (ended || !snap) return;
+    var silent = Date.now() - lastOkAt;
+    if (silent > LOST_MS) { probe(); return; }
+    if (silent > STALE_MS && !lostShown) { lostShown = true; showBanner("通信が途切れています…", false, "lost"); }
+  }
+  function probe() {
+    if (probing) return;
+    probing = true;
+    withTimeout(post("/api/ping", { hidden: document.hidden }), 8000).then(function (j) {
+      probing = false;
+      if (j && j.ok) { markOk(); return; }
+      if (j && (j.__status === 401 || j.__status === 403)) { finish(j.reason || "session"); return; }
+      finish("lost");
+    }, function () { probing = false; finish("lost"); });
+  }
+
+  // ---------- PCからのメッセージ ----------
+  function onMessage(m) {
+    switch (m.type) {
+      case "pending": showScreen("s-wait"); break;
+      case "ready": onReady(m); break;
+      case "paused": paused = !!m.paused; applyPaused(); break;
+      case "state": if (snap && m.state) { snap.states = m.state; if (!ended) renderGrid(); } break;
+      case "tapres": onTapResult(m); break;
+      case "exec": execBusy = !!m.busy; execMulti = !!m.multi; applyExec(); break;
+      case "warn": showWarn(m); break;
+      case "extended": hideBanner(); break;
+      case "bye": finish(m.reason || "closed", true); break;
+      default: break;
+    }
+  }
+
+  function onReady(m) {
+    var first = !snap;
+    snap = m.snapshot;
+    if (!snap || !snap.pages || !snap.pages.length) { showEnd("表示できるボタンがありません", "PC側でボタンを登録してから、もう一度接続してください。"); return; }
+    if (first) {
+      curPage = 0;
+      for (var i = 0; i < snap.pages.length; i++) if (snap.pages[i].index === snap.startPage) { curPage = i; break; }
+      subPage = 0;
+    } else if (curPage >= snap.pages.length) { curPage = 0; subPage = 0; }
+    paused = !!m.paused;
+    if (typeof m.seq === "number" && m.seq > seq) seq = m.seq; // 再読み込み後も、連番が重ならないように続きから
+    execBusy = !!(m.exec && m.exec.busy); execMulti = !!(m.exec && m.exec.multi);
+    showScreen("s-op");
+    layoutRoot();
+    renderAll();
+    applyExec();
+  }
+
+  // ---------- 描画 ----------
+  function pageOf() { return snap.pages[curPage]; }
+  function applyTheme() {
+    var p = pageOf(), t = p.theme || {};
+    var r = $("root").style;
+    r.setProperty("--bg1", safeColor(t.bg1, "#14161B"));
+    r.setProperty("--bg2", safeColor(t.bg2, "#111319"));
+    r.setProperty("--text", safeColor(t.text, "#EDEFF2"));
+    r.setProperty("--border", safeColor(t.border, "#2B303A"));
+    r.setProperty("--panel", safeColor(t.panel, "rgba(29,33,41,0.7)"));
+    r.setProperty("--panelAlt", safeColor(t.panelAlt, "rgba(38,43,53,0.7)"));
+    r.setProperty("--panelSolid", safeColor(t.panelSolid, "rgba(29,33,41,0.76)"));
+    var meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) meta.setAttribute("content", t.dark === false ? "light" : "dark");
+    document.body.style.background = safeColor(t.bg1, "#14161B");
+  }
+  function renderAll() {
+    applyTheme();
+    setText("title", pageOf().label || "");
+    renderGrid();
+    renderPageList();
+    applyPaused();
+  }
+  function applyPaused() {
+    var op = $("s-op");
+    var on = /\bpaused\b/.test(op.className);
+    if (paused && !on) op.className += " paused";
+    if (!paused && on) op.className = op.className.replace(/\s*\bpaused\b/g, "");
+    $("pauseDot").className = paused ? "on" : "";
+    if (paused) showBanner("PC側で一時停止中です。再開されるまで操作できません。", false, "paused");
+    else if (bannerKind === "paused") hideBanner();
+  }
+
+  function gridSpec() {
+    return window.innerHeight > window.innerWidth ? PORTRAIT : LANDSCAPE;
+  }
+  function renderGrid() {
+    if (!snap) return;
+    var spec = gridSpec();
+    var per = spec.cols * spec.rows;
+    var page = pageOf();
+    var tiles = page.tiles || [];
+    var totalSub = Math.max(1, Math.ceil(tiles.length / per));
+    if (subPage >= totalSub) subPage = totalSub - 1;
+    if (subPage < 0) subPage = 0;
+
+    // 固定レイアウト：使える領域を測って、3×6 / 6×3 のマスを均等に割る
+    var area = $("gridArea");
+    var cs = window.getComputedStyle(area);
+    var aw = area.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    var ah = area.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    var gap = Math.max(4, Math.round(Math.min(aw, ah) * 0.022));
+    var cell = Math.floor(Math.min((aw - gap * (spec.cols - 1)) / spec.cols, (ah - gap * (spec.rows - 1)) / spec.rows));
+    if (!(cell > 10)) cell = 10;
+    var g = $("grid");
+    g.style.gap = gap + "px";
+    g.style.gridGap = gap + "px";
+
+    var theme = page.theme || {};
+    var chip = Math.round(cell * 0.92); // 枠なし：マスのほぼ全面をアイコンの面にする
+    var tileRadius = Math.max(4, Math.min(20, Math.round(cell * 0.18)));
+    var chipRadius = Math.max(3, Math.min(14, Math.round(cell * 0.14)));
+
+    // マスの大きさは常に3×6（6×3）基準で固定。ボタンが少ないときは、使っている行・列だけを
+    // 画面の中央にまとめて置く（上や左に偏らない）。
+    var start = subPage * per;
+    var shown = tiles.slice(start, start + per);
+    var effCols = Math.max(1, Math.min(spec.cols, shown.length));
+    var usedRows = Math.max(1, Math.ceil(shown.length / spec.cols));
+    g.style.gridTemplateColumns = "repeat(" + effCols + ", " + cell + "px)";
+    g.style.gridTemplateRows = "repeat(" + usedRows + ", " + cell + "px)";
+    g.innerHTML = "";
+    for (var i = 0; i < shown.length; i++) {
+      g.appendChild(buildTile(shown[i], cell, chip, tileRadius, chipRadius, theme));
+    }
+
+    // サブページ切替（ボタンが18個を超えたときだけ表示。領域は常に確保して、配置が動かないようにする）
+    var pager = $("pager");
+    pager.className = totalSub > 1 ? "" : "off";
+    setText("pcount", (subPage + 1) + " / " + totalSub);
+    $("prevBtn").disabled = subPage <= 0;
+    $("nextBtn").disabled = subPage >= totalSub - 1;
+  }
+
+  function stateOff(t) {
+    var key = t.icon && t.icon.toggle;
+    return !!(key && snap.states && snap.states[key] === true);
+  }
+
+  function buildTile(t, cell, chipSize, tileRadius, chipRadius, theme) {
+    var b = document.createElement("button");
+    b.className = "tile" + (t.blocked ? " blocked" : "");
+    b.style.borderRadius = tileRadius + "px";
+    b.setAttribute("data-id", t.id);
+    b.setAttribute("aria-label", t.name || "");
+    for (var pk in pendingTaps) if (Object.prototype.hasOwnProperty.call(pendingTaps, pk) && pendingTaps[pk].id === t.id) b.className += " running";
+    var color = safeColor(t.color, "#FFFFFF");
+    var off = stateOff(t);
+    var ic = t.icon || {};
+    var chip = document.createElement("div");
+    chip.className = "chip";
+    chip.style.width = chipSize + "px";
+    chip.style.height = chipSize + "px";
+    chip.style.borderRadius = chipRadius + "px";
+    if (ic.kind === "image" && ic.img) {
+      var img = document.createElement("img");
+      img.alt = "";
+      img.onerror = function () { img.style.display = "none"; };
+      img.src = "/api/img/" + encodeURIComponent(t.id) + "?sid=" + encodeURIComponent(sid);
+      chip.appendChild(img);
+    } else if (ic.kind === "emoji") {
+      var chars = Array.from ? Array.from(ic.emoji || "") : String(ic.emoji || "").split("");
+      var scale = chars.length <= 1 ? 0.64 : chars.length === 2 ? 0.46 : 0.4;
+      var em = document.createElement("span");
+      em.className = "emoji";
+      em.style.fontSize = Math.round(chipSize * scale) + "px";
+      em.textContent = ic.emoji || "";
+      chip.appendChild(em);
+    } else {
+      // CSSアイコン：図柄の定義はPCが送ってきたもの（PC内蔵の固定の図柄）を使う
+      var onDef = (snap.icons && snap.icons[ic.key]) || {};
+      var svg = onDef.svg;
+      if (off) {
+        if (ic.offKey && snap.icons && snap.icons[ic.offKey]) svg = snap.icons[ic.offKey].svg;
+        else if (onDef.offSvg) svg = onDef.offSvg;
+      }
+      svg = safeSvg(svg);
+      var fg, bg;
+      if (off && ic.toggle) { fg = "#FF6B5E"; bg = "#FF6B5E33"; }
+      else if (ic.filled) { fg = safeColor(ic.fgFilled, "#FFFFFF"); bg = color; }
+      else { fg = color; bg = color + "26"; }
+      chip.style.background = bg;
+      var wrap = document.createElement("span");
+      wrap.className = "ico";
+      wrap.style.color = fg;
+      wrap.innerHTML = svg || "";
+      chip.appendChild(wrap);
+    }
+    if (ic.kind === "emoji" || (ic.kind === "image" && ic.img)) {
+      if (ic.kind === "emoji") chip.style.background = color + "26";
+    }
+    b.appendChild(chip);
+    if (t.blocked) {
+      var lk = document.createElement("span");
+      lk.className = "lockmark";
+      lk.textContent = "🚫";
+      b.appendChild(lk);
+    }
+    // 押す・長押しは、グリッド全体で受ける（pointerイベントがない古い環境だけ、ふつうのクリックにする）
+    if (!window.PointerEvent) b.addEventListener("click", function () { onTap(t, b); });
+    return b;
+  }
+
+  function renderPageList() {
+    var box = $("pageList");
+    box.innerHTML = "";
+    for (var i = 0; i < snap.pages.length; i++) {
+      (function (idx) {
+        var p = snap.pages[idx];
+        var btn = document.createElement("button");
+        btn.className = "pgbtn" + (idx === curPage ? " cur" : "");
+        btn.textContent = p.label || ("画面" + (p.index + 1));
+        btn.addEventListener("click", function () { switchPage(idx); });
+        box.appendChild(btn);
+      })(i);
+    }
+  }
+  function switchPage(idx) {
+    endPress(false); hideNameTip();
+    openDrawer(false);
+    if (idx === curPage) return;
+    curPage = idx; subPage = 0;
+    renderAll();
+    post("/api/page", { page: snap.pages[idx].index }).then(function () {}, function () {});
+  }
+  function setSub(n) { subPage = n; renderGrid(); }
+  function openDrawer(on) {
+    if (on) { endPress(false); hideNameTip(); }
+    $("drawer").className = on ? "on" : "";
+    $("drawerBack").className = on ? "on" : "";
+  }
+
+  // ---------- 押し方の区別：タップ（0.75秒未満）／長押し（0.75秒以上で名前を表示） ----------
+  function tileEl(id) {
+    var list = $("grid").children;
+    for (var i = 0; i < list.length; i++) if (list[i].getAttribute("data-id") === id) return list[i];
+    return null;
+  }
+  function findTile(id) {
+    if (!snap) return null;
+    var tl = pageOf().tiles || [];
+    for (var i = 0; i < tl.length; i++) if (tl[i].id === id) return tl[i];
+    return null;
+  }
+  function clearCharge(id) {
+    var el = tileEl(id);
+    if (el) el.className = el.className.replace(/\s*\bcharging\b/g, "");
+  }
+  function endPress(markCancelled) {
+    if (!press) return;
+    clearTimeout(press.timer); clearTimeout(press.chargeTimer);
+    clearCharge(press.id);
+    if (markCancelled) press.cancelled = true; else press = null;
+  }
+  function hideNameTip() {
+    clearTimeout(tipTimer);
+    $("nameTip").className = "";
+  }
+  function showNameTip(id) {
+    var t = findTile(id), el = tileEl(id), tip = $("nameTip");
+    if (!t || !el) return;
+    clearTimeout(tipTimer);
+    tip.textContent = t.name ? t.name : "（名前なし）";
+    if (t.blocked) { var sm = document.createElement("small"); sm.textContent = "このボタンはスマホからは使えません"; tip.appendChild(sm); }
+    tip.className = "on";
+    var r = el.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight;
+    var w = tip.offsetWidth, h = tip.offsetHeight;
+    var left = Math.max(8, Math.min(vw - w - 8, r.left + r.width / 2 - w / 2));
+    var top = r.top - h - 8;                       // 指で隠れないよう、まずボタンの上に出す
+    if (top < 8) top = r.bottom + 8;                // 上に入らなければ下
+    if (top + h > vh - 8) top = Math.max(8, r.top + r.height / 2 - h / 2); // 下にも入らなければボタンの上に重ねる
+    tip.style.left = Math.round(left) + "px";
+    tip.style.top = Math.round(top) + "px";
+  }
+  function scheduleTipHide(ms) {
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(hideNameTip, ms);
+  }
+  function onPressDown(e) {
+    if (ended || !snap) return;
+    if (e.isPrimary === false) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    var el = e.target && e.target.closest ? e.target.closest(".tile") : null;
+    if (!el) return;
+    endPress(false);
+    hideNameTip();
+    var id = el.getAttribute("data-id");
+    var me = { id: id, x: e.clientX, y: e.clientY, pid: e.pointerId, long: false, cancelled: false };
+    press = me;
+    me.chargeTimer = setTimeout(function () {
+      if (press !== me || me.cancelled) return;
+      var te = tileEl(id);
+      if (te && !/\bcharging\b/.test(te.className)) te.className += " charging";
+    }, CHARGE_AFTER_MS);
+    me.timer = setTimeout(function () {
+      if (press !== me || me.cancelled) return;
+      me.long = true;
+      clearCharge(id);
+      var te = tileEl(id);
+      if (te) { te.className += " lp-done"; setTimeout(function () { var x = tileEl(id); if (x) x.className = x.className.replace(/\s*\blp-done\b/g, ""); }, 300); }
+      showNameTip(id);
+    }, LONGPRESS_MS);
+  }
+  function onPressMove(e) {
+    if (!press || press.cancelled || press.pid !== e.pointerId || press.long) return;
+    var dx = e.clientX - press.x, dy = e.clientY - press.y;
+    if (dx * dx + dy * dy > MOVE_LIMIT * MOVE_LIMIT) endPress(true); // 指が動いた＝タップでも長押しでもない
+  }
+  function onPressUp(e) {
+    if (!press || press.pid !== e.pointerId) return;
+    var p = press;
+    endPress(false);
+    if (p.long) { scheduleTipHide(1800); return; } // 長押しだったので、押した扱い（実行）にはしない
+    if (p.cancelled) return;
+    var t = findTile(p.id), el = tileEl(p.id);
+    if (t && el) onTap(t, el);
+  }
+  function onPressCancel(e) {
+    if (!press || press.pid !== e.pointerId) return;
+    var wasLong = press.long;
+    endPress(false);
+    if (wasLong) scheduleTipHide(1800);
+  }
+  function installPress() {
+    var g = $("grid");
+    if (!window.PointerEvent) return;
+    g.addEventListener("pointerdown", onPressDown);
+    g.addEventListener("pointermove", onPressMove);
+    g.addEventListener("pointerup", onPressUp);
+    g.addEventListener("pointercancel", onPressCancel);
+    g.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+    g.addEventListener("selectstart", function (e) { e.preventDefault(); });
+  }
+
+  // ---------- ボタンを押す ----------
+  function toast(msg) {
+    var el = $("toast");
+    el.textContent = msg;
+    el.className = "on";
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.className = ""; }, 2200);
+  }
+  var TAP_ERRORS = {
+    paused: "PC側で一時停止中です",
+    blocked: "このボタンはスマホからは使えません",
+    fast: "操作が速すぎます。少し待ってください",
+    busy: "PCが処理中です。少し待ってください",
+    multibusy: "マルチ操作の実行中は、ほかのボタンを押せません",
+    state: "まだ接続できていません",
+    abuse: "操作が多すぎます"
+  };
+  function onTap(t, el) {
+    if (ended || !snap) return;
+    if (t.blocked) { toast("このボタンはスマホからは使えません"); return; }
+    if (paused) { toast(TAP_ERRORS.paused); return; }
+    // マルチ操作の実行中は、そのマルチ操作がすべて終わるまで、ほかのボタンは押せない
+    if (execMulti) { toast(TAP_ERRORS.multibusy); return; }
+    seq += 1;
+    var my = seq;
+    pendingTaps[my] = { el: el, id: t.id, name: t.name || "", at: Date.now(), multi: !!t.multi };
+    el.className += " running";
+    if (t.multi) execMulti = true;
+    applyExec();
+    post("/api/tap", { tile: t.id, seq: my }).then(function (j) {
+      if (j && j.ok) return;
+      delete pendingTaps[my];
+      if (t.multi) execMulti = false;
+      if (j && (j.__status === 401 || j.__status === 403)) { finish(j.reason || "session"); return; }
+      var cur = tileEl(t.id) || el;
+      cur.className = cur.className.replace(/\s*\brunning\b/g, "").replace(/\b(ok|ng)\b/g, "") + " ng";
+      setTimeout(function () { var x = tileEl(t.id) || cur; x.className = x.className.replace(/\s*\bng\b/g, ""); }, 600);
+      toast(TAP_ERRORS[j && j.error] || "実行できませんでした");
+      applyExec();
+    }, function () {
+      delete pendingTaps[my];
+      if (t.multi) execMulti = false;
+      var cur = tileEl(t.id) || el;
+      cur.className = cur.className.replace(/\s*\brunning\b/g, "");
+      toast("PCに届きませんでした");
+      applyExec();
+    });
+    setTimeout(function () {
+      if (pendingTaps[my]) { delete pendingTaps[my]; var x = tileEl(t.id); if (x) x.className = x.className.replace(/\s*\brunning\b/g, ""); applyExec(); }
+    }, TAP_TIMEOUT_MS);
+  }
+  function onTapResult(m) {
+    var p = pendingTaps[m.seq];
+    if (!p) return;
+    delete pendingTaps[m.seq];
+    var el = tileEl(p.id) || p.el; // 再描画で要素が入れ替わっていても、IDで探し直す
+    var cls = m.ok ? "ok" : "ng";
+    if (el) {
+      el.className = el.className.replace(/\s*\brunning\b/g, "").replace(/\b(ok|ng)\b/g, "") + " " + cls;
+      setTimeout(function () { var x = tileEl(p.id) || el; x.className = x.className.replace(/\s*\b(ok|ng)\b/g, ""); }, 600);
+    }
+    if (p.multi) execMulti = false;
+    applyExec();
+    if (m.msg) toast(m.msg);
+  }
+
+  // ---------- 実行中の表示（切断の制限・マルチ操作中の他ボタンの無効化） ----------
+  function pendingCount() {
+    var n = 0;
+    for (var k in pendingTaps) if (Object.prototype.hasOwnProperty.call(pendingTaps, k)) n++;
+    return n;
+  }
+  function isBusyNow() { return execBusy || pendingCount() > 0; }
+  function applyExec() {
+    var op = $("s-op");
+    var on = /\bmultibusy\b/.test(op.className);
+    if (execMulti && !on) op.className += " multibusy";
+    if (!execMulti && on) op.className = op.className.replace(/\s*\bmultibusy\b/g, "");
+    var busy = isBusyNow();
+    $("disconnectBtn").className = "btn danger" + (busy ? " off" : "");
+  }
+
+  // ---------- 警告・終了 ----------
+  function showBanner(text, withExtend, kind) {
+    var b = $("banner");
+    bannerKind = kind || "";
+    b.textContent = text;
+    if (withExtend) {
+      var btn = document.createElement("button");
+      btn.textContent = "続ける";
+      btn.addEventListener("click", function () { post("/api/extend", {}).then(hideBanner, hideBanner); });
+      b.appendChild(btn);
+    }
+    b.className = "on";
+  }
+  function hideBanner() { $("banner").className = ""; bannerKind = ""; }
+  function showWarn(m) {
+    var what = m.kind === "max" ? "最大の接続時間に近づいています" : "しばらく操作がありません";
+    showBanner(what + "。まもなく自動で切断します。", true, "warn");
+  }
+
+  function showEnd(title, text) {
+    ended = true;
+    setText("endTitle", title);
+    setText("endText", text);
+    showScreen("s-end");
+  }
+  function finish(reason, fromPc) {
+    if (ended) return;
+    ended = true;
+    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+    if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
+    if (es) { try { es.close(); } catch (e) { /* 無視 */ } es = null; }
+    try { if (wakeLock && wakeLock.release) wakeLock.release(); } catch (e) { /* 無視 */ }
+    // 画面に出ていたボタンの情報は、すべて消す（切断後に操作できない・内容が残らない）
+    endPress(false); hideNameTip();
+    snap = null; sid = ""; pendingTaps = {}; execBusy = false; execMulti = false;
+    $("grid").innerHTML = ""; $("pageList").innerHTML = "";
+    storeDel("lk_sid");
+    try { history.replaceState(null, "", "/"); } catch (e) { /* 無視 */ }
+    openDrawer(false);
+    $("confirmBack").className = "confirmBack";
+    setText("endTitle", reason === "user-phone" ? "切断しました" : "接続が終了しました");
+    setText("endText", REASONS[reason] || "接続が終了しました。");
+    showScreen("s-end");
+  }
+
+  try { init(); } catch (e) { window.__lkShowError("init: " + (e && e.message)); }
+})();
+</script>
+</body>
+</html>
