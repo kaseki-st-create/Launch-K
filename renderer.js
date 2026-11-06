@@ -102,6 +102,17 @@ function buildColorRow(container, currentColor, onPick) {
   container.appendChild(customDot);
 }
 
+// サウンドボタンで使える音声ファイルの拡張子（これ以外は登録も再生もしない）
+const SOUND_EXTS = ["mp3", "wav", "ogg", "m4a", "aac", "flac", "opus"];
+// 「ファイル」ボタンには登録しない音声ファイル（音声は「サウンド」ボタンに登録する）
+const AUDIO_ONLY_EXTS = ["mp3", "wav", "ogg", "oga", "opus", "m4a", "aac", "flac", "wma", "mid", "midi", "amr", "aiff", "aif"];
+function fileExt(path) {
+  const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(path || ""));
+  return m ? m[1].toLowerCase() : "";
+}
+const isSoundFile = (path) => SOUND_EXTS.includes(fileExt(path));
+const isAudioOnlyFile = (path) => AUDIO_ONLY_EXTS.includes(fileExt(path));
+
 const TYPE_META = {
   link: { label: "リンク" },
   app: { label: "アプリ" },
@@ -126,7 +137,8 @@ const TYPE_META = {
 };
 // マルチ操作の中に入れられる動作の種類（無限再帰になる「マルチ操作」自身と、
 // 常時ユーザーの操作待ちで一連の自動実行に向かない「QRコード」表示は除く）
-const SUB_ACTION_TYPES = Object.keys(TYPE_META).filter((k) => k !== "multi" && k !== "qr");
+// マルチ操作の動作に選べない種類：マルチ操作自身・QR・サウンド（サウンドは一時停止／再開・重複なしの管理があるため、単独のボタンだけで使う）
+const SUB_ACTION_TYPES = Object.keys(TYPE_META).filter((k) => k !== "multi" && k !== "qr" && k !== "sound");
 // Windows標準の「メモ」（notepad.exe）だけは、新しいウィンドウ・新しいタブを
 // 区別する一般的な起動方法が無いため、専用の判定・選択肢を用意する。
 // 選ばれたのが notepad.exe そのものではなく、デスクトップ等の「メモ帳.lnk」（ショートカット）の
@@ -242,7 +254,8 @@ const CSS_ICONS = {
   folder:      { label: "フォルダ",     svg: svgWrap(`<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H10l2 2h7.5A1.5 1.5 0 0 1 21 8.5v10A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z"/>`) },
   clipboard:   { label: "コピー",       svg: svgWrap(`<rect x="7" y="4" width="10" height="16" rx="1.5"/><rect x="9.5" y="2" width="5" height="3" rx="1"/>`) },
   qr:          { label: "QR",          svg: svgWrap(`<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v3M14 20h3M20 20v.01"/>`) },
-  music:       { label: "音符",         svg: svgWrap(`<circle cx="7" cy="18" r="3"/><circle cx="17" cy="16" r="3"/><path d="M10 18V5l10-2v13"/>`) },
+  music:       { label: "音符",         svg: svgWrap(`<circle cx="7" cy="18" r="3"/><circle cx="17" cy="16" r="3"/><path d="M10 18V5l10-2v13"/>`),
+                 offSvg: svgWrap(`<circle cx="7" cy="18" r="3"/><circle cx="17" cy="16" r="3"/><path d="M10 18V5l10-2v13"/><path d="M4 4l16 16" stroke="#FF6B5E"/>`) },
   sun:         { label: "太陽",         svg: svgWrap(`<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>`) },
   moon:        { label: "月",           svg: svgWrap(`<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/>`) },
   sleep:       { label: "スリープ",     svg: `<svg viewBox="0 0 24 24" width="100%" height="100%" fill="currentColor" stroke="none"><text x="2" y="9" font-size="8.5" font-weight="700" font-family="'Space Grotesk',system-ui,sans-serif">Z</text><text x="8.5" y="15" font-size="6.5" font-weight="700" font-family="'Space Grotesk',system-ui,sans-serif">Z</text><text x="13.5" y="20.5" font-size="4.5" font-weight="700" font-family="'Space Grotesk',system-ui,sans-serif">z</text></svg>` },
@@ -325,7 +338,10 @@ const CSS_ICON_GROUPS = [
 //   キーボード・他のアプリ・Windowsの設定でミュートを切り替えた場合に、アイコンが実際と逆になっていた）
 // true=ミュート中 / false=ミュートなし / null=まだ分からない（ミュートなしの見た目にしておく）。
 const audioMuteState = { speaker: null, mic: null };
-const MUTE_POLL_INTERVAL_MS = 5000; // 画面が見えている間、この間隔でOSの実際の状態を読み直す（5秒）
+const MUTE_POLL_INTERVAL_MS = 2000; // 画面が見えている間、この間隔でOSの実際の状態を読み直す（2秒。koffiで直接読むので軽い）
+const MUTE_POLL_SLOW_MS = 5000;     // PowerShell方式に戻っているときは、重いので5秒に間引く
+let muteSlow = false;               // 直前の読み取りがPowerShell方式だったか
+let lastMuteReadAt = 0;
 let muteRefreshInFlight = false;
 let muteRefreshTimer = null;
 function isMuteStateTile(t) {
@@ -341,8 +357,10 @@ async function refreshMuteStates() {
   if (sinceStart < MUTE_READ_NOT_BEFORE_MS) { scheduleMuteRefresh(MUTE_READ_NOT_BEFORE_MS - sinceStart + 50); return; }
   muteRefreshInFlight = true;
   try {
+    lastMuteReadAt = Date.now();
     const r = await window.api.getMuteStates();
     if (!r) return;
+    muteSlow = r.slow === true;
     let changed = false;
     for (const key of ["speaker", "mic"]) {
       // 取得できなかった（null）ときは、直前の表示をそのまま残す
@@ -363,14 +381,45 @@ function isTileMuted(tile) {
   if (tile.type === "mic") return audioMuteState.mic === true;
   return false;
 }
+// ---------- サウンドボタンの再生状態 ----------
+// ボタンごとに1つだけ再生できる（同じボタンの音は重ならない）。別のボタンの音は同時に鳴らせる。
+// 鳴っている間に同じボタンを押すと一時停止、もう一度押すと続きから再生。最後まで鳴ると自動で止まり、次は最初から。
+const soundPlayers = new Map(); // tileId -> { audio, state: "playing" | "paused", path }
+function isSoundPlaying(tile) {
+  const p = tile && soundPlayers.get(tile.id);
+  return !!p && p.state === "playing";
+}
+function stopSoundFor(tileId) {
+  const p = soundPlayers.get(tileId);
+  if (!p) return;
+  soundPlayers.delete(tileId);
+  try { p.audio.pause(); p.audio.removeAttribute("src"); p.audio.load(); } catch (e) { /* 無視 */ }
+}
+// ボタンが削除された・別のファイルに変更された・種類が変わったときは、その音を止める
+function reconcileSounds() {
+  if (!soundPlayers.size) return;
+  let changed = false;
+  for (const [id, p] of Array.from(soundPlayers.entries())) {
+    const t = Array.isArray(tiles) ? tiles.find((x) => x && x.id === id) : null;
+    if (!t || t.type !== "sound" || t.filePath !== p.path) { stopSoundFor(id); changed = true; }
+  }
+  return changed;
+}
 // このボタンが「今オフ状態か」を判定する（オン/オフ対応アイコンのみ意味を持つ）
 function isIconOff(tile) {
+  if (tile && tile.type === "sound") return !isSoundPlaying(tile); // サウンド：再生中=オン／止まっている（停止・一時停止）=オフ
   return isTileMuted(tile);
 }
 // このタイルがそもそも「オン/オフ」の状態を持つ種類か（ミュート系ボタン）。
 // これらは「CSS」アイコンを個別選択する場合、オン用・オフ用の2つを両方選ぶ必要がある。
 function tileHasToggle(tile) {
   return (tile.type === "volume" && tile.action === "mute") || tile.type === "mic";
+}
+// アイコンに斜線を足した「オフ」用の図柄を作る（オフ用の図柄を持たないアイコン用。サウンドが止まっているとき）
+function svgWithSlash(svg) {
+  const s = String(svg || "");
+  const i = s.lastIndexOf("</svg>");
+  return i < 0 ? s : s.slice(0, i) + `<path d="M4 4l16 16" stroke="#FF6B5E"/>` + s.slice(i);
 }
 
 // タイルの種類・動作から、CSSアイコンの初期値（デフォルト）を決める
@@ -1204,19 +1253,33 @@ function removeObsLeftovers() {
   return result;
 }
 
+// マルチ操作にサウンドは入れられない。以前のバージョンで入れていた分は、読み込んだデータから取り除く（メモリ上の処理。保存は呼び出し側）。取り除いた数を返す。
+function removeSoundFromMulti() {
+  let removed = 0;
+  if (!Array.isArray(tiles)) return 0;
+  tiles.forEach((t) => {
+    if (t && Array.isArray(t.subActions)) {
+      const n = t.subActions.length;
+      t.subActions = t.subActions.filter((sub) => !(sub && sub.type === "sound"));
+      removed += n - t.subActions.length;
+    }
+  });
+  return removed;
+}
+
 async function init() {
   tiles = (await window.api.loadTiles()) || [];
   if (!Array.isArray(tiles)) tiles = [];
   const loaded = await window.api.loadSettings();
   settings = { ...DEFAULT_SETTINGS, ...(loaded || {}) };
   const obsCleanup = removeObsLeftovers();
+  const soundSubsRemoved = removeSoundFromMulti();
   ensurePageThemes();
   if (IS_LAUNCH0) { await initLaunch0(); return; } // Launch-0：ボタンの一覧やショートカットは扱わない（launch0.js）
   applyTheme();
   updateLockButton();
   renderGrid();
   syncHotkeys(WINDOW_PAGE_INDEX === 0);
-  l0InstallHotkey(); // 0 + K の同時押しでLaunch-0を開く
   if (WINDOW_PAGE_INDEX === 0) window.api.onLaunch0Ended((reason) => { const m = l0EndMessage(reason); if (m) showToast(m); });
   // 取り除いたOBS関連のデータを保存する（メイン画面だけが行う。同時に複数の窓が保存して競合しないように）
   if (WINDOW_PAGE_INDEX === 0 && (obsCleanup.removedTiles || obsCleanup.removedSubs || obsCleanup.settingsChanged)) {
@@ -1229,13 +1292,25 @@ async function init() {
       console.warn("OBS cleanup save failed:", e && e.message);
     }
   }
+  if (WINDOW_PAGE_INDEX === 0 && soundSubsRemoved) {
+    try {
+      await persistTiles();
+      showToast(`マルチ操作から、サウンドの動作${soundSubsRemoved}個を取り除きました（サウンドはマルチ操作に入れられません）`);
+    } catch (e) {
+      console.warn("sound cleanup save failed:", e && e.message);
+    }
+  }
   // ミュート系のアイコンを、OSの実際の状態に合わせる。起動時に1回、その後は画面に戻ってきたとき
-  // （フォーカス・再表示）と、見えている間の定期的な読み直し（5秒ごと）で最新に保つ。
+  // （フォーカス・再表示）と、見えている間の定期的な読み直し（2秒ごと）で最新に保つ。
   // 起動直後はPowerShellの起動・C#のコンパイルが重く、PC起動時の立ち上がりを遅くするため、起動から3秒は読まない（定期・フォーカス・再表示の読み直しも同様）。
   scheduleMuteRefresh(MUTE_READ_NOT_BEFORE_MS);
   window.addEventListener("focus", () => scheduleMuteRefresh(100));
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") scheduleMuteRefresh(100); });
-  setInterval(() => { if (document.visibilityState === "visible") refreshMuteStates(); }, MUTE_POLL_INTERVAL_MS);
+  setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+    if (muteSlow && Date.now() - lastMuteReadAt < MUTE_POLL_SLOW_MS) return;
+    refreshMuteStates();
+  }, MUTE_POLL_INTERVAL_MS);
   window.api.onHotkeyTriggered((id) => {
     const tile = tiles.find((t) => t.id === id);
     if (tile) handleTileClick(tile);
@@ -1387,6 +1462,7 @@ function isSmallWindow() {
 let lastTotalPages = 1;
 let gridRelayoutGuard = false;
 function renderGrid() {
+  reconcileSounds(); // 削除・変更されたサウンドボタンの音は止める
   if (IS_LAUNCH0) { l0OnGridRender(); return; } // Launch-0ではグリッドを描かない（ミュート状態などをスマホへ反映するだけ）
   window.api.hideTooltip(); // 再描画で消えるボタンのツールチップが残らないようにする
   clampActivePage();
@@ -1745,13 +1821,16 @@ function iconInner(tile, forceOff) {
   } else {
     const iconKey = resolveCssIconKey(tile);
     const def = CSS_ICONS[iconKey] || CSS_ICONS.circleMark;
-    svg = off && def.toggle && def.offSvg ? def.offSvg : def.svg;
+    if (off && tile.type === "sound") svg = def.offSvg || svgWithSlash(def.svg); // サウンドが止まっているとき：斜線入り
+    else svg = off && def.toggle && def.offSvg ? def.offSvg : def.svg;
   }
   // ミュート系の赤い状態表示は、塗りつぶし設定より優先してそのまま見せる。
-  const mutedOverride = forceOff !== undefined ? forceOff : isTileMuted(tile);
+  // （サウンドの「オフ」は、本体の色はそのままで、斜線だけが赤い）
+  const redBody = off && tileHasToggle(tile);
+  const mutedOverride = redBody;
   const filled = tile.icon?.kind === "css" && tile.icon.filled && !mutedOverride;
   let color;
-  if (off && tileHasToggle(tile)) {
+  if (redBody) {
     color = "#FF6B5E";
   } else if (filled) {
     // 塗りつぶし背景の上でもアイコンがくっきり見えるよう、背景色の明るさに応じて白/黒を選ぶ。
@@ -1791,7 +1870,74 @@ async function runVolumeAction(tile) {
     }
   }
 }
-const activeSounds = new Set();
+async function runSoundTile(tile) {
+  if (!tile.filePath) return showToast("音声ファイルが設定されていません");
+  // 音声ファイル以外（動画・実行ファイルなど）は、サウンドボタンでは再生しない
+  if (!isSoundFile(tile.filePath)) return showToast("再生できません：音声ファイル（" + SOUND_EXTS.join("・") + "）を選んでください");
+  const volume = Math.max(0, Math.min(1, (tile.volume ?? 100) / 100));
+  const cur = soundPlayers.get(tile.id);
+  if (cur && cur.path !== tile.filePath) stopSoundFor(tile.id); // 別のファイルに変更されていたら、前の音は止める
+  const player = soundPlayers.get(tile.id);
+  if (player) {
+    // 鳴っている間に同じボタン：一時停止。止まっている（一時停止中）なら、続きから再生。
+    if (player.state === "playing") {
+      player.audio.pause();
+      player.state = "paused";
+      renderGrid();
+      return;
+    }
+    player.audio.volume = volume;
+    player.state = "playing";
+    renderGrid();
+    try { await player.audio.play(); } catch (err) {
+      if (err && err.name === "AbortError") return;
+      stopSoundFor(tile.id);
+      renderGrid();
+      showToast("再生できませんでした" + (err && err.name ? "（" + err.name + "）" : ""));
+    }
+    return;
+  }
+  // 新しく再生する（同じボタンの音は、最初の1つだけ。連打しても重ならない）
+  const audio = new Audio();
+  const entry = { audio, state: "playing", path: tile.filePath };
+  soundPlayers.set(tile.id, entry);
+  const stillOurs = () => soundPlayers.get(tile.id) === entry;
+  audio.addEventListener("ended", () => {
+    // 最後まで鳴ったら自動で止まる（次に押すと、最初から）
+    if (!stillOurs()) return;
+    soundPlayers.delete(tile.id);
+    renderGrid();
+  });
+  audio.addEventListener("error", () => {
+    if (!stillOurs()) return;
+    soundPlayers.delete(tile.id);
+    renderGrid();
+    const c = audio.error && audio.error.code;
+    showToast(c === 4 ? "再生できませんでした：ファイルが見つからないか、形式が未対応です" : "再生できませんでした：読み込みエラー（" + (c || "?") + "）");
+  });
+  // 他のアプリ・キーボードのメディアキーなどで止められたり、再開されたりしたときも、表示を実際に合わせる
+  audio.addEventListener("pause", () => {
+    if (!stillOurs() || audio.ended || entry.state !== "playing") return;
+    entry.state = "paused";
+    renderGrid();
+  });
+  audio.addEventListener("playing", () => {
+    if (!stillOurs() || entry.state === "playing") return;
+    entry.state = "playing";
+    renderGrid();
+  });
+  try {
+    audio.preload = "auto";
+    audio.src = toFileUrl(tile.filePath);
+    audio.volume = volume;
+    renderGrid();
+    await audio.play();
+  } catch (err) {
+    if (err && err.name === "AbortError") return; // 読み込み中に一時停止された（連打）だけ
+    if (stillOurs()) { soundPlayers.delete(tile.id); renderGrid(); }
+    showToast("再生できませんでした" + (err && err.name ? "（" + err.name + "）" : ""));
+  }
+}
 async function handleTileClick(tile, fromMulti) {
   // マルチ操作の実行中は、それ自身の内部処理（サブ動作の順次実行）以外からの
   // ボタン操作をすべて受け付けない。これを許すと、例えば「LINEを開いて応答待ち」の
@@ -1813,26 +1959,7 @@ async function handleTileClick(tile, fromMulti) {
     return;
   }
   if (tile.type === "sound") {
-    if (!tile.filePath) return showToast("音声ファイルが設定されていません");
-    try {
-      const audio = new Audio();
-      activeSounds.add(audio); // 再生中にGCされないよう保持
-      const done = () => activeSounds.delete(audio);
-      audio.addEventListener("ended", done);
-      audio.addEventListener("error", () => {
-        done();
-        const c = audio.error && audio.error.code;
-        showToast(c === 4 ? "再生できませんでした：ファイルが見つからないか、形式が未対応です" : "再生できませんでした：読み込みエラー（" + (c || "?") + "）");
-      });
-      audio.preload = "auto";
-      audio.src = toFileUrl(tile.filePath);
-      audio.volume = Math.max(0, Math.min(1, (tile.volume ?? 100) / 100));
-      audio.play().catch((err) => {
-        if (err && err.name === "AbortError") return; // 読み込み中に別操作で中断されただけ
-        done();
-        showToast("再生できませんでした" + (err && err.name ? "（" + err.name + "）" : ""));
-      });
-    } catch (e) { showToast("再生できませんでした"); }
+    await runSoundTile(tile);
     return;
   }
   if (tile.type === "file" || tile.type === "app") {
@@ -2007,7 +2134,7 @@ async function runMultiAction(tile) {
   if (multiRunningIds.size > 0) {
     return showToast("ほかのマルチ操作の実行中です。終わってからお試しください");
   }
-  const list = (Array.isArray(tile.subActions) ? tile.subActions : []).filter((s) => s && s.type && s.type !== "multi" && s.type !== "qr");
+  const list = (Array.isArray(tile.subActions) ? tile.subActions : []).filter((s) => s && s.type && s.type !== "multi" && s.type !== "qr" && s.type !== "sound");
   if (list.length < 2) return showToast("マルチ操作には動作を2つ以上設定してください");
   multiRunningIds.add(tile.id);
   // 実行を始めた時点でLaunch-K自身が前面にいるか（ボタンのクリックで実行したか）。
@@ -2243,6 +2370,7 @@ function renderSubFields(fieldsEl, sub, t) {
     fieldsEl.querySelector(".sub-pick").addEventListener("click", async () => {
       const picked = sub.type === "folder" ? await window.api.pickFolder() : await window.api.pickFile(exts || []);
       if (picked) {
+        if (sub.type === "file" && isAudioOnlyFile(picked)) { showToast("音声ファイルは、「サウンド」ボタンに登録してください（マルチ操作には入れられません）"); return; }
         sub.filePath = picked;
         if (sub.type === "app") await resolveNotepadShortcut(picked); // ショートカット経由の「メモ」も判定
         renderMultiSubList(t);
@@ -2280,8 +2408,6 @@ function renderSubFields(fieldsEl, sub, t) {
       b.addEventListener("click", () => { sub.browser = key; renderMultiSubList(t); });
       browserRow.appendChild(b);
     });
-  } else if (sub.type === "sound") {
-    pickBtn("🎵 音声ファイルを選択", [{ name: "音声ファイル", extensions: ["mp3", "wav", "ogg", "m4a"] }]);
   } else if (sub.type === "app") {
     pickBtn("🖥 アプリ（.exe等）を選択", [{ name: "アプリケーション", extensions: ["exe", "lnk", "bat", "cmd"] }]);
     // 以前に設定済みの.lnk（まだリンク先を調べていないもの）は、裏で判定して、メモだった場合だけ描き直す
@@ -2556,15 +2682,17 @@ function renderModal() {
     }
   } else if (t.type === "sound") {
     typeSpecific.innerHTML = `
-      <div class="path-preview" style="margin-top:0;">クリックすると、選んだ音声ファイル（mp3・wav・ogg・m4a）をそのまま再生します。</div>
+      <div class="path-preview" style="margin-top:0;">クリックすると、選んだ音声ファイルを再生します。鳴っている間にもう一度押すと一時停止、もう一度押すと続きから再生します。最後まで鳴ると自動で止まります。同じボタンの音は重なりません（別のボタンの音は同時に鳴ります）。対応する形式：${SOUND_EXTS.join("・")}</div>
       <div class="file-pick-btn" id="pickSoundBtn">🎵 音声ファイルを選択</div>
       <div class="path-preview">${t.filePath ? escapeHtml(t.filePath) : "未選択"}</div>
       <div class="field-label">個別音量（<span id="volLabel">${numAttr(t.volume ?? 100, 100)}</span>）</div>
       <input type="range" id="volInput" min="0" max="100" value="${numAttr(t.volume ?? 100, 100)}" style="width:100%;accent-color:var(--accent);margin-bottom:14px;" />
     `;
     document.getElementById("pickSoundBtn").addEventListener("click", async () => {
-      const picked = await window.api.pickFile([{ name: "音声ファイル", extensions: ["mp3", "wav", "ogg", "m4a"] }]);
-      if (picked) { t.filePath = picked; renderModal(); }
+      const picked = await window.api.pickFile([{ name: "音声ファイル", extensions: SOUND_EXTS }]);
+      if (!picked) return;
+      if (!isSoundFile(picked)) { showToast("音声ファイル（" + SOUND_EXTS.join("・") + "）を選んでください"); return; }
+      t.filePath = picked; renderModal();
     });
   } else if (t.type === "app") {
     typeSpecific.innerHTML = `<div class="file-pick-btn" id="pickAppBtn">🖥 起動するアプリ（.exe等）を選択</div><div class="path-preview">${t.filePath ? escapeHtml(t.filePath) : "未選択"}</div>`;
@@ -2607,7 +2735,9 @@ function renderModal() {
     bindOpenMaximizedRow(t);
     document.getElementById("pickFileBtn").addEventListener("click", async () => {
       const picked = await window.api.pickFile([]);
-      if (picked) { t.filePath = picked; renderModal(); }
+      if (!picked) return;
+      if (isAudioOnlyFile(picked)) { showToast("音声ファイルは、「サウンド」ボタンに登録してください"); return; }
+      t.filePath = picked; renderModal();
     });
   } else if (t.type === "folder") {
     typeSpecific.innerHTML = `<div class="file-pick-btn" id="pickFolderBtn">📁 開くフォルダを選択</div><div class="path-preview">${t.filePath ? escapeHtml(t.filePath) : "未選択"}</div>${openMaximizedRowHtml(t)}`;
@@ -2948,7 +3078,7 @@ function renderModal() {
     const previewRow = `
       <div class="icon-preview-row">
         <div class="tile-icon-wrap" style="position:relative;width:36px;height:36px;--icon-size:36px;">
-          <div class="tile-icon" style="width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden;${iconBg(t, hasToggle ? editingOff : undefined)}">${iconInner(t, hasToggle ? editingOff : undefined)}</div>
+          <div class="tile-icon" style="width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden;${iconBg(t, hasToggle ? editingOff : (t.type === "sound" ? false : undefined))}">${iconInner(t, hasToggle ? editingOff : (t.type === "sound" ? false : undefined))}</div>
         </div>
         <span style="font-size:12px;color:var(--text-muted);">プレビュー</span>
       </div>
@@ -3112,6 +3242,8 @@ async function saveModalImpl() {
   if (t.icon?.kind === "css" && tileHasToggle(t) && !t.icon.offValue) {
     return showToast("オン用・オフ用のアイコンを両方選んでください");
   }
+  if (t.type === "sound" && t.filePath && !isSoundFile(t.filePath)) return showToast("音声ファイル（" + SOUND_EXTS.join("・") + "）を選んでください");
+  if (t.type === "file" && t.filePath && isAudioOnlyFile(t.filePath)) return showToast("音声ファイルは、「サウンド」ボタンに登録してください");
   if ((t.type === "link" || t.type === "qr") && !t.url.trim()) return showToast(t.type === "qr" ? "QRコードにするURLを入力してください" : "リンク先URLを入力してください");
   if ((t.type === "sound" || t.type === "file" || t.type === "folder" || t.type === "app") && !t.filePath) return showToast(t.type === "folder" ? "フォルダを選択してください" : t.type === "app" ? "起動するアプリを選択してください" : "ファイルを選択してください");
   if (t.type === "clipboard") {
@@ -3125,6 +3257,8 @@ async function saveModalImpl() {
     for (let i = 0; i < subs.length; i++) {
       const s = subs[i];
       const n = i + 1;
+      if (s.type === "sound") return showToast(`${n}番目の動作：サウンドはマルチ操作に入れられません。削除してください`);
+      if (s.type === "file" && s.filePath && isAudioOnlyFile(s.filePath)) return showToast(`${n}番目の動作：音声ファイルは「サウンド」ボタンに登録してください（マルチ操作には入れられません）`);
       if ((s.type === "link") && !(s.url || "").trim()) return showToast(`${n}番目の動作：リンク先URLを入力してください`);
       if ((s.type === "sound" || s.type === "file" || s.type === "folder" || s.type === "app") && !s.filePath) return showToast(`${n}番目の動作：ファイルまたはフォルダを選択してください`);
       if (s.type === "clipboard") {
@@ -3323,6 +3457,36 @@ document.addEventListener("keydown", (e) => {
   renderGrid();
 });
 
+// ---------- 設定パネル（ハンバーガーメニュー）：↑↓キーで上下にスクロール ----------
+// ↑/↓で少しずつ、PageUp/PageDownで1画面ぶん、Home/Endで先頭・末尾へ。
+// 入力欄・スライダー・選択欄・ラジオボタン（矢印キーで値が変わる部品）にフォーカスがあるときや、
+// ホットキー記録中・確認ダイアログ表示中は何もしない（値を意図せず変えないため）。
+document.addEventListener("keydown", (e) => {
+  const k = e.key;
+  if (k !== "ArrowUp" && k !== "ArrowDown" && k !== "PageUp" && k !== "PageDown" && k !== "Home" && k !== "End") return;
+  if (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey || e.isComposing) return;
+  if (recordingHotkey) return;
+  if (!settingsOverlayEl.classList.contains("show")) return;
+  if (overlayEl.classList.contains("show")) return; // 設定の上に別のダイアログが開いているとき
+  const t = e.target;
+  if (t && (t.isContentEditable || (t.tagName && /^(TEXTAREA|SELECT)$/.test(t.tagName)))) return;
+  if (t && t.tagName === "INPUT" && !/^(checkbox|button|submit)$/.test(t.type)) return; // 文字・数字・スライダー・ラジオ・色などは、矢印キーを本来の操作に使う
+  const body = settingsBodyEl;
+  if (!body || body.scrollHeight <= body.clientHeight) return;
+  const step = 70;
+  const page = Math.max(80, body.clientHeight - 60);
+  let top = null;
+  if (k === "ArrowUp") top = body.scrollTop - step;
+  else if (k === "ArrowDown") top = body.scrollTop + step;
+  else if (k === "PageUp") top = body.scrollTop - page;
+  else if (k === "PageDown") top = body.scrollTop + page;
+  else if (k === "Home") top = 0;
+  else if (k === "End") top = body.scrollHeight;
+  if (top === null) return;
+  e.preventDefault();
+  body.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+});
+
 // ---------- インポート確認 ----------
 function openConfirmImport(data) {
   const count = Array.isArray(data.tiles) ? data.tiles.length : 0;
@@ -3338,6 +3502,7 @@ function openConfirmImport(data) {
     let clearedDup = clearConflictingLaunchHotkeys(tiles);
     settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
     removeObsLeftovers(); // 廃止したOBS連携のボタン・接続設定が古いバックアップに入っていても取り除く
+  removeSoundFromMulti(); // マルチ操作に入れたサウンドの動作も、古いバックアップに入っていれば取り除く
     await persistTiles();
     await persistSettings();
     currentPage = 0;
@@ -3371,7 +3536,7 @@ function buildImportedPageTiles(incoming, otherTiles, pageIndex, pageCount) {
     if ("targetPage" in t) t.targetPage = fixTarget(t.targetPage);
     if (Array.isArray(t.subActions)) {
       t.subActions = t.subActions
-        .filter((sub) => !(sub && sub.type === "obs"))
+        .filter((sub) => !(sub && (sub.type === "obs" || sub.type === "sound")))
         .map((sub) => (sub && typeof sub === "object" && "targetPage" in sub ? { ...sub, targetPage: fixTarget(sub.targetPage) } : sub));
     }
     return t;
@@ -3525,7 +3690,6 @@ function renderSettingsPanel() {
         <button class="btn default" id="exportPageBtn">エクスポート</button>
         <button class="btn default" id="importPageBtn">インポート</button>
       </div>
-      <div class="path-preview" style="margin-top:8px;margin-bottom:0;">画面だけのバックアップは、その画面のボタンと画面ごとの設定（レイアウト・表示・テーマなど）を保存します。読み込むと、いま開いている画面だけが上書きされ、他の画面は変わりません。</div>
     </div>
     <div id="linksSection"></div>
     <div class="settings-section boxed">
@@ -3536,7 +3700,6 @@ function renderSettingsPanel() {
     <div class="settings-section boxed">
       <h3>スマホ操作</h3>
       <button class="btn default" id="launch0OpenBtn" style="width:100%;">📱 Launch-0（スマホから操作する）</button>
-      <div class="path-preview" style="margin-top:8px;margin-bottom:0;">iPhoneからこのPCのボタンを押せるようにします。開くと、いまの画面はすべて閉じます。（0 と K の同時押しでも開けます）</div>
     </div>
   `;
 
@@ -4023,21 +4186,21 @@ function renderTosPanel() {
       <h4>2. リンク先コンテンツについて</h4>
       登録したリンク先ウェブサイトの内容、安全性、合法性、可用性について、運営者は一切の保証をせず、責任を負いません。リンク先で生じたいかなる損害についても自己責任でご対応ください。
       <h4>3. ファイル・電源操作について</h4>
-      ファイルを開く機能、および音量・スリープ・シャットダウンなどの操作は、ユーザー自身が設定した内容に基づいて実行されます。誤操作による作業内容の損失等について運営者は責任を負いません。
+      ファイルを開く機能、および音量・スリープ・シャットダウンなどの操作は、ユーザー自身が設定した内容に基づいて実行されます。誤操作による作業内容の損失等について運営者は責任を負いません。また、サウンドで再生する音声ファイルの内容・音量・利用（著作権を含みます）は、ユーザー自身の責任で管理してください。
       <h4>4. データの保存について</h4>
       登録した設定はお使いのパソコン内に保存されます。パソコンの初期化や設定変更等によりデータが消失する可能性があるため、重要な設定はバックアップ機能で別途保管してください。
       <h4>5. 自己責任でのご利用</h4>
       本アプリには、ウィンドウの配置・移動、キー操作の送信、音量・マイクのミュート切替、画面のキャプチャ、複数の動作の自動連続実行など、お使いのパソコンを操作する機能が含まれます。本アプリの利用（設定の誤りや操作ミス、他のソフトウェアとの組み合わせ、パソコンの環境による動作の違いを含みます）により生じた、データの損失、機器の不具合、第三者への損害、情報の漏えい、その他一切の損害・不利益は、すべてユーザー自身の責任とします。ユーザーは、ご自身の判断と責任において本アプリを利用するものとします。ただし、法令により運営者が責任を負う場合は除きます。
       また、画面キャプチャで取得した画像には、個人情報や機密情報が写り込むことがあります。取得・保存・共有は、ご自身の責任で行ってください。
       <h4>6. スマホ操作（Launch-0）について</h4>
-      Launch-0は、スマートフォンのブラウザからパソコンのボタンを押せるようにする機能です。接続には、パソコンに表示されるQRコードと6文字のパスワード、およびパソコン側での許可が必要で、同時に接続できるのは1台までです。スマホから実行できるのは、あらかじめ登録したボタンの操作に限られ、画面の切り替え・タイマー・QRコード・電源操作などは実行できません。パソコン側からいつでも一時停止・切断でき、通信の途切れ、無操作、最長接続時間、スリープや画面ロックなどの場合には自動的に切断されます。QRコードとパスワードの取り扱い、接続を許可するかどうかの判断、スマホやパソコンの管理は、ご自身の責任で行ってください。心当たりのない接続要求は許可しないでください。
+      Launch-0は、スマートフォンのブラウザからパソコンのボタンを押せるようにする機能です。接続には、パソコンに表示されるQRコードと6文字のパスワード（英小文字4文字と数字2文字）、およびパソコン側での許可（Enterキーでも行えます）が必要で、同時に接続できるのは1台までです。スマホから実行できるのは、あらかじめ登録したボタンの操作に限られ、画面の切り替え・タイマー・QRコード・電源操作などは実行できません。パソコン側からいつでも一時停止・切断でき、通信の途切れ、無操作、最長接続時間、スリープや画面ロックなどの場合には自動的に切断されます。QRコードとパスワードの取り扱い、接続を許可するかどうかの判断、スマホやパソコンの管理は、ご自身の責任で行ってください。心当たりのない接続要求は許可しないでください。
       <h4>7. 通信方法とTailscaleについて</h4>
-      Launch-0の接続方法には「Tailscale」と「同じWi-Fi」があります。Tailscaleは第三者が提供する別のサービスで、その利用にはTailscale自身の利用規約・プライバシーポリシーが適用されます。本アプリはTailscaleの提供元とは関係がなく、Tailscaleの動作・安全性・可用性を保証しません。本アプリは、接続してきた端末がこのパソコンと同じアカウントのものかを確認するため、Tailscaleの状態（端末名・アカウント名・接続経路など）を読み取りますが、Tailscaleのパスワードは扱いません。アカウント名は、画面に表示するかどうかを切り替えられます。「同じWi-Fi」は通信が暗号化されないため、自宅など信頼できるネットワークでのみ使ってください。Windowsファイアウォールの許可を追加する場合は、管理者の確認が表示され、Tailscaleの番号帯からの通信だけを許可する規則が1つ追加されます。
+      Launch-0の接続方法はTailscaleだけです。Tailscaleは第三者が提供する別のサービスで、その利用にはTailscale自身の利用規約・プライバシーポリシーが適用されます。本アプリはTailscaleの提供元とは関係がなく、Tailscaleの動作・安全性・可用性を保証しません。本アプリは、接続してきた端末がこのパソコンと同じアカウントのものかを確認するため、Tailscaleの状態（端末名・アカウント名・接続経路など）を読み取りますが、Tailscaleのパスワードは扱いません。アカウント名は、画面に表示するかどうかを切り替えられます。Windowsファイアウォールの許可を追加する場合は、管理者の確認が表示され、Tailscaleの番号帯からの通信だけを許可する規則が1つ追加されます。
       <h4>8. アップデートについて</h4>
       本アプリは、新しいバージョンがあると自動で確認・ダウンロードし、終了時にインストールすることがあります。更新により、機能や動作が変わる場合があります。
       <h4>9. 免責事項</h4>
       本アプリは現状有姿で提供され、内容の正確性・完全性・特定目的への適合性についていかなる保証も行いません。本アプリの利用により生じたいかなる損害についても、運営者は責任を負いません。これには、スマホ操作（Launch-0）や外部サービス（Tailscaleなど）の利用・障害に起因する損害を含みます。
-      <div class="tos-copy">最終更新：2026年11月4日<br>© kaseki</div>
+      <div class="tos-copy">最終更新：2026年11月6日<br>© kaseki</div>
     </div>
   `;
   document.getElementById("backToSettings").addEventListener("click", renderSettingsPanel);
@@ -4066,8 +4229,10 @@ document.addEventListener("drop", async (e) => {
     const filePath = file.path;
     if (!filePath) { showToast("ファイルのパスを取得できませんでした"); return; }
     const guessedName = file.name.replace(/\.[^./\\]+$/, "").slice(0, 20) || "無題";
+    // 音声ファイルは「サウンド」ボタンにする（「ファイル」ボタンには登録しない）。サウンドで再生できない形式の音声は登録しない。
+    if (isAudioOnlyFile(filePath) && !isSoundFile(filePath)) { showToast("この形式の音声は登録できません（対応：" + SOUND_EXTS.join("・") + "）"); return; }
     openAddModal();
-    modalData.tile.type = "file";
+    modalData.tile.type = isSoundFile(filePath) ? "sound" : "file";
     modalData.tile.filePath = filePath;
     modalData.tile.name = guessedName;
     renderModal();

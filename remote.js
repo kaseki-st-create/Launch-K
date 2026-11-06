@@ -4,8 +4,7 @@
 //
 // 方針
 //  ・追加のnpmパッケージは使わない（Node標準の http だけ。スマホへの通知は SSE、スマホからの操作は POST）。
-//  ・同じLAN内のプライベートIPからの接続だけを受け付ける。インターネットには出さない。
-//  ・Tailscaleモードでは、PCのTailscale用IPアドレスだけで待ち受け（同じWi-Fiには窓口を開かない）、
+//  ・Tailscale専用。PCのTailscale用IPアドレス（100.64.0.0/10）だけで待ち受け（同じWi-Fiには窓口を開かない）、
 //    接続してきた端末が「このPCと同じアカウントの端末」かをTailscaleに確かめてから、先へ進める。
 //  ・スマホから届くのは「ボタンのID」と連番だけ。パス・コマンド・キー内容は一切受け取らない／送らない。
 //    IDは接続開始時にPCが作った一覧（実行してよいボタンだけ）に載っているものだけを通す。
@@ -14,21 +13,25 @@
 // ============================================================================
 const http = require("http");
 const crypto = require("crypto");
-const os = require("os");
 const fs = require("fs");
 const path = require("path");
 
 // ---- 調整できる値 ----
-const OTP_CHARS = "abcdefghjkmnpqrstuvwxyz23456789"; // 0/o・1/l/i など紛らわしい文字は除く
-const OTP_LENGTH = 6;
-const OTP_TTL_MS = 30 * 1000;           // QRとパスワードを作り直す間隔
+// パスワードは6文字：前半4文字が英小文字、後半2文字が数字。紛らわしい文字（l/o と 0/1）は除く。
+const OTP_LETTERS = "abcdefghijkmnpqrstuvwxyz"; // 24文字（l・o を除く）
+const OTP_DIGITS = "23456789";                   // 8文字（0・1 を除く）
+const OTP_LETTER_COUNT = 4;
+const OTP_DIGIT_COUNT = 2;
+const OTP_LENGTH = OTP_LETTER_COUNT + OTP_DIGIT_COUNT;
+const OTP_RE = /^[a-z]{4}[0-9]{2}$/;
+const OTP_TTL_MS = 45 * 1000;           // QRとパスワードを作り直す間隔（待ち時間90秒の間に、最初と45秒後の2回表示される）
 const OTP_GRACE_MS = 30 * 1000;         // 作り直した直後は、1つ前のものも、この時間だけ有効（入力の最中に切り替わっても困らないように）
 const TICKET_TTL_MS = 3 * 60 * 1000;    // QRを読み取ってページを開いたあと、パスワードを入力できる時間
 const WAIT_IDLE_MS = 90 * 1000;         // QRを出してから、誰も接続しに来ないまま、この時間たつとLaunch-0を閉じる
 const OTP_MAX_FAILS = 3;                // 間違えてよい回数（QRを出している間の合計。超えたらQRとパスワードを作り直す）
-const APPROVAL_TIMEOUT_MS = 30 * 1000;  // PCの許可待ちの最大時間
-const STALE_AFTER_MS = 25 * 1000;       // これだけ応答が無いと「通信が途切れている」扱い（警告）
-const DROP_AFTER_MS = 75 * 1000;        // これだけ応答が無いと切断
+const APPROVAL_TIMEOUT_MS = 20 * 1000;  // PCの許可待ちの最大時間
+const STALE_AFTER_MS = 120 * 1000;      // これだけ応答が無いと「通信が途切れている」扱い（警告）。スマホ側（mobile.html の STALE_MS）と同じ値にする
+const DROP_AFTER_MS = 360 * 1000;       // これだけ応答が無いと切断（スマホ側の LOST_MS と同じ値）
 const IDLE_LIMIT_MS = 30 * 60 * 1000;   // 無操作で自動切断
 const MAX_SESSION_MS = 3 * 60 * 60 * 1000; // 最大接続時間
 const WARN_BEFORE_MS = 60 * 1000;       // 自動切断の何ミリ秒前に警告するか
@@ -54,10 +57,18 @@ const IP_CHECK_MS = 10 * 1000;
 const SAFE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 function randHex(bytes) { return crypto.randomBytes(bytes).toString("hex"); }
+// 偏りが出ないよう、range の約数で割り切れない範囲の乱数は捨てて引き直す（拒否サンプリング）
+function randIndex(range) {
+  const limit = 256 - (256 % range);
+  for (;;) {
+    const buf = crypto.randomBytes(16);
+    for (let i = 0; i < buf.length; i++) if (buf[i] < limit) return buf[i] % range;
+  }
+}
 function makeOtp() {
   let s = "";
-  const buf = crypto.randomBytes(OTP_LENGTH * 2);
-  for (let i = 0; i < OTP_LENGTH; i++) s += OTP_CHARS[buf[i] % OTP_CHARS.length];
+  for (let i = 0; i < OTP_LETTER_COUNT; i++) s += OTP_LETTERS[randIndex(OTP_LETTERS.length)];
+  for (let i = 0; i < OTP_DIGIT_COUNT; i++) s += OTP_DIGITS[randIndex(OTP_DIGITS.length)];
   return s;
 }
 function safeEq(a, b) {
@@ -67,44 +78,10 @@ function safeEq(a, b) {
   return crypto.timingSafeEqual(x, y);
 }
 function normAddr(a) { return String(a || "").replace(/^::ffff:/i, ""); }
-function isPrivateAddr(raw) {
-  const a = normAddr(raw);
-  if (a === "127.0.0.1" || a === "::1") return true;
-  const m = a.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return false;
-  const [o1, o2] = [Number(m[1]), Number(m[2])];
-  if (o1 === 10) return true;
-  if (o1 === 172 && o2 >= 16 && o2 <= 31) return true;
-  if (o1 === 192 && o2 === 168) return true;
-  if (o1 === 169 && o2 === 254) return true;
-  return false;
-}
-
 function isTailnetAddr(raw) {
   const m = normAddr(raw).match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!m) return false;
   return Number(m[1]) === 100 && Number(m[2]) >= 64 && Number(m[2]) <= 127; // 100.64.0.0/10
-}
-
-// ---- このPCのLAN側IPv4を選ぶ（仮想アダプタ・VPNは後回し）----
-const VIRTUAL_NAME_RE = /(vethernet|virtualbox|vmware|hyper-v|wsl|loopback|bluetooth|tailscale|zerotier|docker|vpn|tap-|tun)/i;
-function listLanAddresses() {
-  const out = [];
-  let ifs = {};
-  try { ifs = os.networkInterfaces(); } catch (e) { ifs = {}; }
-  for (const name of Object.keys(ifs)) {
-    for (const ni of ifs[name] || []) {
-      if (!ni || (ni.family !== "IPv4" && ni.family !== 4) || ni.internal) continue;
-      if (!isPrivateAddr(ni.address) || ni.address.startsWith("169.254.")) continue;
-      const virtual = VIRTUAL_NAME_RE.test(name);
-      const o = ni.address.split(".").map(Number);
-      let rank = o[0] === 192 ? 0 : o[0] === 10 ? 1 : 2;
-      if (virtual) rank += 10;
-      out.push({ name, address: ni.address, rank, virtual });
-    }
-  }
-  out.sort((a, b) => a.rank - b.rank);
-  return out;
 }
 
 function createRemote(opts) {
@@ -113,12 +90,13 @@ function createRemote(opts) {
   const mobileHtmlPath = opts.mobileHtmlPath;
   const appVersion = String(opts.appVersion || "");
   const ts = opts.tailscale || null; // tailscale.js のクライアント（Tailscaleモードで使う）
-  let mode = "lan";                  // "lan"（同じWi-Fi）| "tailscale"
+  const mode = "tailscale";          // 接続方法はTailscaleだけ（同じWi-Fiモードは廃止）
 
   let server = null;
   let tick = null;
   let port = 0;
   let ip = "";
+  let pcName = ""; // このPCのTailscale上の名前（スマホの「接続の安全」表示用）
   let phase = "idle"; // idle | waiting | pending | active
   let qrToken = "";
   let otp = "";
@@ -134,6 +112,7 @@ function createRemote(opts) {
   let session = null;
   let lastEnded = null; // 直前に終わった接続の理由（スマホが戻ってきたとき、本当の理由を返すため。10分だけ覚える）
   let lastIpCheck = 0;
+  let lastInfoAt = 0;
   const authLog = new Map(); // ip -> [timestamps]
   const rejectedLog = new Map(); // ip -> 最後に「断った」と通知した時刻
   const reqLog = new Map();      // ip -> [timestamps]（全リクエストの量の制限用）
@@ -175,7 +154,7 @@ function createRemote(opts) {
   }
 
   // ---------- 認証まわり ----------
-  // 30秒ごとの自動更新。QRもパスワードも新しくし、1つ前のものは30秒だけ残す。
+  // 45秒ごとの自動更新。QRもパスワードも新しくし、1つ前のものは30秒だけ残す。
   // 間違えた回数は更新しても戻さない（QRを出している間の合計で数える）。
   function rotateCredentials(reason) {
     prevToken = qrToken; prevOtp = otp; prevUntil = now() + OTP_GRACE_MS;
@@ -245,7 +224,7 @@ function createRemote(opts) {
   // ---------- Tailscaleモード：接続相手の確認 ----------
   function remoteAllowed(addr) {
     if (typeof opts.remoteFilter === "function") return !!opts.remoteFilter(addr, mode); // テスト専用
-    return mode === "tailscale" ? isTailnetAddr(addr) : isPrivateAddr(addr);
+    return isTailnetAddr(addr); // Tailscaleの番号帯（100.64.0.0/10）以外からは受け付けない
   }
   function reportRejected(addr, reason) {
     const t = now();
@@ -263,7 +242,7 @@ function createRemote(opts) {
   }
   // 接続中の相手が、まだ同じアカウントの端末か／経路が変わっていないかを、定期的に確かめる
   function checkPeer() {
-    if (mode !== "tailscale" || !ts || peerChecking) return;
+    if (!ts || peerChecking) return;
     if (now() - lastPeerCheck < PEER_RECHECK_MS) return;
     lastPeerCheck = now();
     const s = session;
@@ -316,6 +295,16 @@ function createRemote(opts) {
       hiddenSince: 0, paused: false, stalled: false,
       seqLast: 0, lastTapAt: 0, tileLast: new Map(), tapTimes: [], attempts: [], abuse: 0,
       page: 0, warned: { idle: false, max: false }, maxDeadline: 0,
+    };
+  }
+  // スマホの「接続の安全」表示に渡す情報（PC名・経路の種類・自動切断までの残り秒）。アカウント名やIPアドレスは含めない。
+  function infoPayload(s) {
+    const t = now();
+    return {
+      pc: pcName,
+      route: s && s.route && typeof s.route.kind === "string" ? s.route.kind : "unknown",
+      idleLeft: s ? Math.max(0, Math.round((IDLE_LIMIT_MS - (t - s.lastActivity)) / 1000)) : 0,
+      maxLeft: s && s.maxDeadline ? Math.max(0, Math.round((s.maxDeadline - t) / 1000)) : 0,
     };
   }
   // 接続中（またはPC側の都合）の終了。サーバーはそのままだが、このあとLaunch-0側が全体を閉じる。
@@ -394,7 +383,6 @@ function createRemote(opts) {
       const addr = normAddr(req.socket.remoteAddress);
       if (!remoteAllowed(addr)) { res.writeHead(403); res.end(); return; }
       if (tooManyRequests(addr)) { res.writeHead(429, { "Retry-After": "30" }); res.end(); return; }
-      if (mode !== "tailscale") return handleInner(req, res, null);
       // Tailscaleモード：このPCと同じアカウントの端末だけを通す（確認できなければ断る＝安全側）
       if (!ts) { res.writeHead(403); res.end(); return; }
       ts.peerFor(addr).then((r) => {
@@ -435,7 +423,7 @@ function createRemote(opts) {
       const okByToken = tokenOk(k);
       const okBySid = !!session && !!sidParam && safeEq(sidParam, session.sid) && remote === session.ip;
       if (!okByToken && !okBySid) {
-        return text(res, 403, "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><body style='font-family:sans-serif;padding:24px'><h3>このURLは無効です</h3><p>PCのQRコードは30秒ごとに新しくなります。PCのLaunch-0に表示されたQRコードを、もう一度読み取ってください。</p></body>", "text/html; charset=utf-8");
+        return text(res, 403, "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><body style='font-family:sans-serif;padding:24px'><h3>このURLは無効です</h3><p>PCのQRコードは45秒ごとに新しくなります。PCのLaunch-0に表示されたQRコードを、もう一度読み取ってください。</p></body>", "text/html; charset=utf-8");
       }
       // QRで開いたときだけ、パスワード入力用の許可証（3分間有効・このスマホだけ）をページに埋め込む
       let ticket = "";
@@ -465,10 +453,10 @@ function createRemote(opts) {
       });
       res.write("retry: 2000\n\n");
       s.sse = res;
-      s.lastSeen = now();
+      if (!s.stalled) s.lastSeen = now(); // 途切れ中は、再接続だけでは「生きている」とみなさない（/api/ping が届いてから再開する）
       req.on("close", () => { if (session === s && s.sse === res) s.sse = null; });
       if (s.state === "pending") sseWrite(res, { type: "pending" });
-      else sseWrite(res, { type: "ready", snapshot: JSON.parse(snapshotJson), paused: s.paused, page: s.page, seq: s.seqLast, mode, exec: { busy: exec.size > 0, multi: multiRunning() } });
+      else sseWrite(res, { type: "ready", snapshot: JSON.parse(snapshotJson), paused: s.paused, page: s.page, seq: s.seqLast, mode, info: infoPayload(s), exec: { busy: exec.size > 0, multi: multiRunning() } });
       return;
     }
 
@@ -496,7 +484,7 @@ function createRemote(opts) {
         // QRのトークン（または、QRで開いたページに埋め込まれた許可証）が有効でなければ、パスワードの確認まで進まない
         if (!(tokenOk(k) || ticketOk(k, remote))) return json(res, 403, { ok: false, error: "token" });
         touchWait();
-        if (!/^[a-z0-9]{6}$/.test(given) || !otpOk(given)) {
+        if (!OTP_RE.test(given) || !otpOk(given)) {
           otpFails += 1;
           emit({ type: "auth-fail", count: otpFails, max: OTP_MAX_FAILS, ip: remote });
           if (otpFails >= OTP_MAX_FAILS) {
@@ -514,10 +502,24 @@ function createRemote(opts) {
       });
     }
 
+    // パスワード入力画面を開いているスマホが、「PCがまだ待っているか」を確かめるための窓口。
+    // 待機時間は延ばさない（延ばすと、スマホを開いたままPCが閉じなくなる）。パスワードの試行にも数えない。
+    if (p === "/api/probe") {
+      return readBody(req, res, (b) => {
+        const k = typeof b.k === "string" ? b.k : "";
+        if (phase !== "waiting") return json(res, 409, { ok: false, error: session ? "busy" : "closed" });
+        if (!(tokenOk(k) || ticketOk(k, remote))) return json(res, 403, { ok: false, error: "token" });
+        return json(res, 200, { ok: true });
+      });
+    }
+
     if (p === "/api/tap") {
       return readBody(req, res, (b) => {
         const s = getSession(req, res, req.headers["x-sid"]);
         if (!s) return;
+        // 通信が途切れている間（stalled）は、操作を受け付けない。/api/ping が届いて、つながりが戻ってから再開する。
+        // （途切れ中に、セッションIDだけを使って操作されることを防ぐ。lastSeen も更新しない）
+        if (s.stalled) return json(res, 409, { ok: false, error: "stalled" });
         s.lastSeen = now();
         if (s.state !== "active") return json(res, 409, { ok: false, error: "state" });
         const tile = typeof b.tile === "string" ? b.tile : "";
@@ -577,6 +579,7 @@ function createRemote(opts) {
       return readBody(req, res, (b) => {
         const s = getSession(req, res, req.headers["x-sid"]);
         if (!s) return;
+        if (s.stalled) return json(res, 409, { ok: false, error: "stalled" }); // 途切れ中は、画面の切り替えも受け付けない（lastSeen も更新しない）
         s.lastSeen = now();
         if (s.state !== "active") return json(res, 409, { ok: false });
         const n = Number.isInteger(b.page) ? b.page : -1;
@@ -621,9 +624,7 @@ function createRemote(opts) {
     }
     if (t - lastIpCheck > IP_CHECK_MS) {
       lastIpCheck = t;
-      // 同じWi-Fiモード：使っているIPアドレスが無くなったら（Wi-Fiが変わった等）終了。Tailscaleモードは、下の確認で見る
-      const still = opts.forceIp || mode === "tailscale" ? true : listLanAddresses().some((a) => a.address === ip);
-      if (!still) { return finish("network"); }
+      // Tailscaleの状態・接続相手は、下の checkPeer() が定期的に確認する
     }
     broadcastExec();
     checkPeer();
@@ -645,6 +646,8 @@ function createRemote(opts) {
     if (maxLeft <= 0) return finish("maxtime");
     if (idleLeft <= WARN_BEFORE_MS && !s.warned.idle) { s.warned.idle = true; const secs = Math.ceil(idleLeft / 1000); emit({ type: "warn", kind: "idle", secs }); toPhone({ type: "warn", kind: "idle", secs }); }
     if (maxLeft <= WARN_BEFORE_MS && !s.warned.max) { s.warned.max = true; const secs = Math.ceil(maxLeft / 1000); emit({ type: "warn", kind: "max", secs }); toPhone({ type: "warn", kind: "max", secs }); }
+    // スマホの「接続の安全」表示の更新（5秒ごと）
+    if (t - lastInfoAt >= 5000) { lastInfoAt = t; toPhone({ type: "info", info: infoPayload(s) }); }
     // SSEの生存確認（コメント行。iOSやルーターに切られにくくする）
     if (s.sse) { try { s.sse.write(": ping\n\n"); } catch (e) { s.sse = null; } }
   }
@@ -652,23 +655,16 @@ function createRemote(opts) {
   // ---------- 外から呼ぶ操作 ----------
   async function start(args) {
     if (server) throw new Error("already running");
-    mode = args && args.mode === "tailscale" ? "tailscale" : "lan";
-    let lans;
-    let bindAddr = "0.0.0.0";
+    let bindAddr;
     let tsInfo = null;
-    if (mode === "tailscale") {
-      if (!ts) throw new Error("tailscale-unavailable");
-      const st = await ts.status();
-      if (!st.ok) throw new Error("ts-" + (st.reason || "error"));
-      ip = opts.forceIp || st.selfIp;
-      bindAddr = ip; // 同じWi-Fiの窓口は開かず、Tailscale用のIPアドレスだけで待ち受ける
-      lans = [{ address: ip }];
-      tsInfo = { selfName: st.selfName, login: st.login, display: st.display, tailnet: st.tailnet };
-    } else {
-      lans = opts.forceIp ? [{ name: "test", address: opts.forceIp }] : listLanAddresses(); // forceIpはテスト専用
-      if (!lans.length) throw new Error("no-lan");
-      ip = lans[0].address;
-    }
+    if (!ts) throw new Error("tailscale-unavailable");
+    const st = await ts.status();
+    if (!st.ok) throw new Error("ts-" + (st.reason || "error"));
+    ip = opts.forceIp || st.selfIp;
+    if (!opts.forceIp && !isTailnetAddr(ip)) throw new Error("ts-no-ip"); // Tailscaleの番号帯でなければ開始しない（安全側）
+    bindAddr = ip; // 同じWi-Fiの窓口は開かず、Tailscale用のIPアドレスだけで待ち受ける
+    tsInfo = { selfName: st.selfName, login: st.login, display: st.display, tailnet: st.tailnet };
+    pcName = String(st.selfName || "").slice(0, 60);
     lastEnded = null;
     exec.clear(); lastExecSig = "false:false:0"; lastPeerCheck = 0; reqLog.clear();
     snapshotJson = JSON.stringify(args.snapshot || {});
@@ -717,7 +713,7 @@ function createRemote(opts) {
     lastIpCheck = now();
     renewAll("start");
     tick = setInterval(onTick, TICK_MS);
-    return { url: buildUrl(), otp, otpExpiresAt, waitDeadline, ip, port, mode, tailscale: tsInfo, candidates: lans.map((a) => a.address) };
+    return { url: buildUrl(), otp, otpExpiresAt, waitDeadline, ip, port, mode, tailscale: tsInfo, candidates: [ip] };
   }
   function approve(ok) {
     if (!session || session.state !== "pending") return false;
@@ -726,7 +722,7 @@ function createRemote(opts) {
     session.state = "active";
     session.lastSeen = t; session.lastActivity = t; session.maxDeadline = t + MAX_SESSION_MS;
     phase = "active";
-    toPhone({ type: "ready", snapshot: JSON.parse(snapshotJson), paused: false, page: session.page, seq: session.seqLast, mode, exec: { busy: exec.size > 0, multi: multiRunning() } });
+    toPhone({ type: "ready", snapshot: JSON.parse(snapshotJson), paused: false, page: session.page, seq: session.seqLast, mode, info: infoPayload(session), exec: { busy: exec.size > 0, multi: multiRunning() } });
     lastExecSig = execSig(); // "ready" にすでに実行状態を含めたので、同じ内容を重ねて送らない
     emit({ type: "connected", ip: session.ip, ua: session.ua, since: t, mode, peer: publicPeer(session.peer), route: session.route });
     return true;
@@ -779,4 +775,4 @@ function createRemote(opts) {
   return { start, approve, pause, extend, tapResult, pushState, disconnect, shutdown, status, isBusy, refreshCredentials: () => { if (phase === "waiting") renewAll("manual"); } };
 }
 
-module.exports = { createRemote, listLanAddresses, isPrivateAddr, isTailnetAddr, OTP_TTL_MS, OTP_GRACE_MS, WAIT_IDLE_MS, APPROVAL_TIMEOUT_MS, OTP_MAX_FAILS };
+module.exports = { createRemote, isTailnetAddr, OTP_TTL_MS, OTP_GRACE_MS, WAIT_IDLE_MS, APPROVAL_TIMEOUT_MS, OTP_MAX_FAILS };

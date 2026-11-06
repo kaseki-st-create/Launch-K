@@ -32,11 +32,11 @@ const l0 = {
   stalled: false,
   phonePage: null,
   warn: null,                   // { kind, until }
-  mode: "lan",                  // 接続方法の選択："tailscale" | "lan"
+  mode: "tailscale",            // 接続方法はTailscaleだけ（同じWi-Fiモードは廃止）
   ts: null,                     // Tailscaleの状態 { ok, reason, ip, selfName, login, tailnet }
   tsLoading: false,
   fw: null,                     // ファイアウォールの許可の状態 { supported, exists, adding }
-  sessionMode: "lan",           // 実際につながっている方法
+  sessionMode: "tailscale",     // 実際につながっている方法（常にtailscale）
   peer: null,                   // Tailscaleで確認できた相手 { name, os, login, path }
   route: null,                  // 経路 { kind: direct|relay|peer-relay|unknown, detail }
   showAcct: false,              // アカウント名の表示（最初は隠す）
@@ -139,7 +139,8 @@ function l0ThemeFor(pt) {
 
 async function l0IconFor(t, icons, images) {
   const ic = t.icon || {};
-  const toggle = tileHasToggle(t) ? (t.type === "mic" ? "mic" : "speaker") : null;
+  // 「オン/オフ」の状態を持つボタンが、スマホで使う状態の名前：マイク／スピーカー／サウンドはボタンごと（"snd:" + ID）
+  const toggle = tileHasToggle(t) ? (t.type === "mic" ? "mic" : "speaker") : (t.type === "sound" ? "snd:" + String(t.id) : null);
   if (ic.kind === "image" && ic.value) {
     let data = "";
     try {
@@ -154,7 +155,8 @@ async function l0IconFor(t, icons, images) {
   if (ic.kind === "emoji" && ic.value) return { kind: "emoji", emoji: Array.from(String(ic.value)).slice(0, 8).join(""), toggle };
   const key = CSS_ICONS[resolveCssIconKey(t)] ? resolveCssIconKey(t) : "circleMark";
   const def = CSS_ICONS[key];
-  icons[key] = { svg: def.svg, offSvg: def.offSvg || "" };
+  // サウンドは、止まっているとき用の斜線入りの図柄を、オフ用の図柄を持たないアイコンにも自動で用意する
+  icons[key] = { svg: def.svg, offSvg: def.offSvg || (t.type === "sound" ? svgWithSlash(def.svg) : "") };
   let offKey = null;
   if (ic.kind === "css" && toggle && ic.offValue && CSS_ICONS[ic.offValue]) {
     offKey = ic.offValue;
@@ -168,6 +170,14 @@ async function l0IconFor(t, icons, images) {
   };
 }
 
+// スマホに渡す「いまの状態」：スピーカー・マイクのミュートと、サウンドボタンごとの「止まっているか」（true=オフ＝止まっている）
+function l0States() {
+  const s = { speaker: audioMuteState.speaker, mic: audioMuteState.mic };
+  for (const t of tiles) {
+    if (t && t.type === "sound" && L0_SAFE_ID_RE.test(String(t.id))) s["snd:" + String(t.id)] = !isSoundPlaying(t);
+  }
+  return s;
+}
 async function l0BuildSnapshot(startPage) {
   const icons = {};
   const images = {};
@@ -188,7 +198,7 @@ async function l0BuildSnapshot(startPage) {
   }
   const snapshot = {
     v: 1, startPage, icons, pages,
-    states: { speaker: audioMuteState.speaker, mic: audioMuteState.mic },
+    states: l0States(),
   };
   return { snapshot, allowedIds, multiIds, images };
 }
@@ -238,7 +248,7 @@ function l0Fmt(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
   return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
 }
-// ---- 接続方法のパネル（Tailscale／同じWi-Fi） ----
+// ---- 接続方法のパネル（Tailscale） ----
 const L0_TS_MESSAGES = {
   "not-installed": "Tailscaleが入っていません。入れて、ログインすると使えます。",
   stopped: "Tailscaleが停止しています。タスクトレイのTailscaleをオンにしてください。",
@@ -248,9 +258,6 @@ const L0_TS_MESSAGES = {
   "not-running": "Tailscaleが動いていないようです。Tailscaleを起動してください。",
 };
 function l0ModePanelHtml() {
-  if (l0.mode === "lan") {
-    return `<div class="l0-notice">⚠ 通信は暗号化されません。自宅など、自分しかいないWi-Fiで使ってください。公共のWi-Fiでは使わないでください。</div>`;
-  }
   const ts = l0.ts;
   if (l0.tsLoading || !ts) return `<div class="l0-sub">Tailscaleを確認しています…</div>`;
   if (!ts.ok) {
@@ -266,7 +273,7 @@ function l0ModePanelHtml() {
          <div class="l0-row"><button class="btn default" id="l0FwAdd"${l0.fw.adding ? " disabled" : ""}>${l0.fw.adding ? "追加しています…" : "許可を追加（管理者の確認が出ます）"}</button></div>`;
   }
   return `<div class="l0-ok-note">✅ Tailscale：使えます（暗号化・同じアカウントの端末だけ接続できます）</div>
-    <div class="l0-sub">アカウント：${l0Acct(ts.login || ts.display || "")}　このPC：<b>${escapeHtml(ts.selfName || "")}</b>（${escapeHtml(ts.ip || "")}）</div>
+    <div class="l0-sub">ac：${l0Acct(ts.login || ts.display || "")}　このPC：<b>${escapeHtml(ts.selfName || "")}</b></div>
     <div class="l0-sub">iPhoneでも、同じアカウントでTailscaleをオンにしてください。</div>
     ${fw}
     <div class="l0-row"><button class="btn default" id="l0TsRecheck">再確認</button></div>`;
@@ -279,37 +286,35 @@ function l0StatusText() {
 }
 function l0DotClass() { return l0.stalled ? " stalled" : l0.paused ? " paused" : ""; }
 
-// アカウント名（メールアドレスなど）は、最初は伏せ字にして、ボタンで表示・非表示を切り替える
+// アカウント名（メールアドレスなど）は、最初は伏せ字にして、押すたびに表示・非表示を切り替える。
+// 伏せ字（●●●●●●●●）または名前と、顔が、
+// ひとつのボタン。●や名前の部分を押しても切り替わる。顔：表示中は (o_o)（目が開いている）、隠れ中は (- -)（目を閉じている）。
 function l0Acct(text) {
   const t = String(text || "");
   if (!t) return "<b>-</b>";
   const on = l0.showAcct === true;
-  return `<span class="l0-acct"><b>${on ? escapeHtml(t) : "●●●●●●●●"}</b><button type="button" class="l0-eye" aria-pressed="${on}" aria-label="${on ? "アカウント名を隠す" : "アカウント名を表示"}">${on ? "🙈 隠す" : "👁 表示"}</button></span>`;
+  const label = on ? "アカウント名を隠す" : "アカウント名を表示";
+  return `<button type="button" class="l0-acct l0-eye" aria-pressed="${on}" aria-label="${label}" title="${label}">${on ? `<b>${escapeHtml(t)}</b>` : `<b class="l0-dots">●●●●●●●●</b>`}<span class="l0-face" aria-hidden="true">${on ? "(o_o)" : "(- -)"}</span></button>`;
 }
 function l0Render() {
   const root = l0Root();
   if (!root) return;
   const notice = l0.notice ? `<div class="l0-notice">${escapeHtml(l0.notice)}</div>` : "";
   const closing = l0.closingWait ? `<div class="l0-warn">動作の完了を待っています。終わったら、自動でLaunch-0を閉じます。</div>` : "";
-  const modeLabel = l0.mode === "tailscale" ? "🔒 Tailscale（暗号化・同じアカウントの端末だけ）" : "📶 同じWi-Fi（暗号化なし）";
+  const modeLabel = "🔒 Tailscale（暗号化・同じアカウントの端末だけ）";
   let body = "";
   if (l0.phase === "select") {
     const pages = l0PagesWithTiles();
     if (l0.startPage === null || !pages.some((p) => p.index === l0.startPage)) l0.startPage = pages.length ? pages[0].index : null;
-    const canStart = pages.length && !l0.busy && (l0.mode !== "tailscale" || (l0.ts && l0.ts.ok));
+    const canStart = pages.length && !l0.busy && !!(l0.ts && l0.ts.ok);
     body = `
-      <div class="l0-sub">接続方法</div>
-      <div class="l0-modes">
-        <button class="l0-mode${l0.mode === "tailscale" ? " sel" : ""}" data-mode="tailscale">🔒 Tailscale<span>おすすめ・暗号化・外でも使える</span></button>
-        <button class="l0-mode${l0.mode === "lan" ? " sel" : ""}" data-mode="lan">📶 同じWi-Fi<span>暗号化なし・自宅などで</span></button>
-      </div>
       ${l0ModePanelHtml()}
       <div class="l0-sub" style="margin-top:6px;">スマホで最初に表示する画面を選んでください。</div>
       <div class="l0-list">${pages.map((p) => `<button class="l0-pick${p.index === l0.startPage ? " sel" : ""}" data-page="${p.index}">画面${p.index + 1}<span>ボタン ${p.count}個</span></button>`).join("") || '<div class="l0-sub">ボタンがある画面がありません</div>'}</div>
       ${notice}
       <div class="modal-actions">
         <button class="btn default" id="l0Quit">やめる</button>
-        <button class="btn primary" id="l0QrBtn" ${canStart ? "" : "disabled"}>QRを表示</button>
+        <button class="btn primary" id="l0QrBtn" ${canStart ? "" : "disabled"} title="Enterキーでも進めます">QRを表示</button>
       </div>`;
   } else if (l0.phase === "waiting" && l0.creds) {
     let qrImg = "";
@@ -339,12 +344,12 @@ function l0Render() {
     const dev = l0DeviceLabel(l0.device && l0.device.ua);
     const devText = dev.name + (dev.browser ? "（" + dev.browser + "）" : "");
     let detail;
-    if (l0.sessionMode === "tailscale" && l0.peer) {
+    if (l0.peer) {
       detail = `<div class="l0-ok-note">✅ Tailscaleで確認済み（このPCと同じアカウントの端末です）</div>
-        <div class="l0-sub">端末名：<b>${escapeHtml(l0.peer.name || "")}</b>${l0.peer.os ? "（" + escapeHtml(l0.peer.os) + "）" : ""}　アカウント：${l0Acct(l0.peer.login || "")}</div>
+        <div class="l0-sub">端末名：<b>${escapeHtml(l0.peer.name || "")}</b>${l0.peer.os ? "（" + escapeHtml(l0.peer.os) + "）" : ""}　ac：${l0Acct(l0.peer.login || "")}</div>
         <div class="l0-sub">経路：${escapeHtml(l0RouteText(l0.route))}</div>`;
     } else {
-      detail = `<div class="l0-notice">⚠ 同じWi-Fi内の端末です。本人かどうかは確認できません。<br>IPアドレス：${escapeHtml(l0.device ? l0.device.ip : "")}</div>`;
+      detail = `<div class="l0-notice">⚠ Tailscaleで端末を確認できませんでした。心当たりがなければ「拒否」を押してください。<br>IPアドレス：${escapeHtml(l0.device ? l0.device.ip : "")}</div>`;
     }
     body = `
       <div class="l0-card">
@@ -354,15 +359,15 @@ function l0Render() {
         <div class="l0-sub">（あと <b id="l0ApprLeft">--</b> 秒）許可すると、その端末からボタンを押せるようになります。心当たりがなければ「拒否」を押してください。</div>
       </div>
       <div class="modal-actions">
-        <button class="btn default dialog-default" id="l0Deny">拒否</button>
-        <button class="btn primary" id="l0Allow">許可</button>
+        <button class="btn default" id="l0Deny">拒否</button>
+        <button class="btn primary dialog-default" id="l0Allow" title="Enterキーでも許可できます">許可</button>
       </div>`;
   } else if (l0.phase === "active") {
     const warn = l0.warn ? `<div class="l0-warn">まもなく自動で切断します。 <button class="btn primary" id="l0Extend">このまま続ける</button></div>` : "";
-    const whoHtml = l0.sessionMode === "tailscale" && l0.peer
+    const whoHtml = l0.peer
       ? `${escapeHtml(l0.peer.name || "")}（${l0Acct(l0.peer.login || "")}）`
       : escapeHtml(`${l0DeviceName(l0.device && l0.device.ua)}（${l0.device ? l0.device.ip : ""}）`);
-    const routeCell = l0.sessionMode === "tailscale" ? l0RouteText(l0.route) : "同じWi-Fi内";
+    const routeCell = l0RouteText(l0.route);
     const cannotDisc = l0.execBusy || l0.exec > 0 || l0.closingWait;
     body = `
       <div class="l0-status"><span class="l0-dot${l0DotClass()}" id="l0Dot"></span><b id="l0StatusText">${escapeHtml(l0StatusText())}</b>
@@ -372,10 +377,9 @@ function l0Render() {
         <div><span>接続時間</span><b id="l0Elapsed">00:00</b></div>
         <div><span>操作回数</span><b id="l0Count">${l0.count}</b></div>
         <div><span>スマホの表示</span><b id="l0PhonePage">${l0.phonePage === null ? "-" : "画面" + (l0.phonePage + 1)}</b></div>
-        <div style="flex-basis:100%;"><span>接続方法・経路</span><b id="l0Route" style="font-size:13px;">${escapeHtml((l0.sessionMode === "tailscale" ? "🔒 Tailscale　" : "📶 ") + routeCell)}</b></div>
+        <div style="flex-basis:100%;"><span>接続方法・経路</span><b id="l0Route" style="font-size:13px;">${escapeHtml("🔒 Tailscale　" + routeCell)}</b></div>
       </div>
       <div class="l0-sub">最後の操作：<b id="l0Last">${l0.last ? escapeHtml("画面" + l0.last.page + "「" + l0.last.name + "」 " + l0.last.at) : "まだありません"}</b></div>
-      <div class="l0-sub">ボタンの編集やショートカットキーは使えません。操作の実行中は、完了するまで切断できません。</div>
       ${notice}
       <div class="modal-actions">
         <button class="btn default" id="l0Pause"${l0.closingWait ? " disabled" : ""}>${l0.paused ? "再開" : "一時停止"}</button>
@@ -391,7 +395,6 @@ function l0Render() {
 function l0Bind() {
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
   document.querySelectorAll(".l0-pick").forEach((b) => b.addEventListener("click", () => { l0.startPage = Number(b.dataset.page); l0Render(); }));
-  document.querySelectorAll(".l0-mode").forEach((b) => b.addEventListener("click", () => l0SetMode(b.dataset.mode)));
   document.querySelectorAll(".l0-eye").forEach((b) => b.addEventListener("click", () => {
     const root = l0Root(); const top = root ? root.scrollTop : 0;
     l0.showAcct = !l0.showAcct; l0Render();
@@ -414,8 +417,9 @@ function l0Bind() {
     const r = await window.api.l0Disconnect();
     if (r === false) { l0.notice = "動作を実行中のため、完了するまで切断できません。"; l0Render(); }
   });
-  const deny = document.getElementById("l0Deny");
-  if (deny) deny.focus();
+  // 許可の画面は、Enterキーで「許可」（押しっぱなしは無視）。見た目の強調とフォーカスも「許可」に置く
+  const allow = document.getElementById("l0Allow");
+  if (allow) allow.focus();
 }
 // 1秒ごとに更新する小さな表示（再描画せずに文字だけ書き換える）
 function l0UpdateLive() {
@@ -433,20 +437,13 @@ function l0UpdateLive() {
     set("l0StatusText", l0StatusText());
     const dot = document.getElementById("l0Dot");
     if (dot) dot.className = "l0-dot" + l0DotClass();
-    if (l0.sessionMode === "tailscale") set("l0Route", "🔒 Tailscale　" + l0RouteText(l0.route));
+    set("l0Route", "🔒 Tailscale　" + l0RouteText(l0.route));
     const d = document.getElementById("l0Disconnect");
     if (d) d.disabled = !!(l0.execBusy || l0.exec > 0 || l0.closingWait);
   }
 }
 
-// ---------- 接続方法・Tailscale ----------
-function l0SetMode(m) {
-  l0.mode = m === "tailscale" ? "tailscale" : "lan";
-  try { localStorage.setItem("lk_l0_mode", l0.mode); } catch (e) { /* 無視 */ }
-  l0.notice = "";
-  l0Render();
-  if (l0.mode === "tailscale") l0LoadTs();
-}
+// ---------- Tailscale ----------
 async function l0LoadTs() {
   l0.tsLoading = true;
   if (l0.phase === "select") l0Render();
@@ -469,7 +466,6 @@ async function l0FwAdd() {
   l0Render();
 }
 const L0_START_ERRORS = {
-  "no-lan": "このPCがWi-Fi・LANにつながっていないようです。同じネットワークにつないでからやり直してください。",
   "tailscale-unavailable": "Tailscaleの機能を使えませんでした。",
   "ts-not-installed": "Tailscaleが入っていません。",
   "ts-stopped": "Tailscaleが停止しています。Tailscaleをオンにしてからやり直してください。",
@@ -494,7 +490,7 @@ async function l0Begin() {
       l0.phase = "select";
     } else {
       l0.creds = { url: res.url, otp: res.otp, otpExpiresAt: res.otpExpiresAt, waitDeadline: res.waitDeadline };
-      l0.sessionMode = res.mode || l0.mode;
+      l0.sessionMode = "tailscale";
       l0.notice = "";
       l0.phase = "waiting";
     }
@@ -578,11 +574,15 @@ async function l0RefreshMute() {
 }
 function l0PushState() {
   if (l0.phase !== "active") return;
-  window.api.l0PushState({ speaker: audioMuteState.speaker, mic: audioMuteState.mic });
+  window.api.l0PushState(l0States());
 }
 function l0StartMutePush() {
   if (l0.muteTimer) clearInterval(l0.muteTimer);
-  l0.muteTimer = setInterval(() => { l0RefreshMute().then(l0PushState); }, 5000);
+  // 2秒ごと（koffiで直接読むので軽い）。PowerShell方式に戻っているときだけ、5秒ごとに間引く（renderer.js の muteSlow）
+  l0.muteTimer = setInterval(() => {
+    if (typeof muteSlow !== "undefined" && muteSlow && Date.now() - (typeof lastMuteReadAt !== "undefined" ? lastMuteReadAt : 0) < 5000) return;
+    l0RefreshMute().then(l0PushState);
+  }, 2000);
 }
 // renderer.js の renderGrid() から呼ばれる（Launch-0ではグリッドは描画しない）
 function l0OnGridRender() { l0PushState(); }
@@ -616,77 +616,42 @@ async function initLaunch0() {
   const init = await window.api.l0Init();
   l0Locked = !!(init && init.locked);
   l0UpdateLockBtn();
-  try { const m = localStorage.getItem("lk_l0_mode"); if (m === "tailscale" || m === "lan") l0.mode = m; } catch (e) { /* 無視 */ }
   window.api.onRemoteEvent(l0OnEvent);
   l0.tickTimer = setInterval(l0UpdateLive, 1000);
+  l0InstallEnterKey();
   l0Render();
-  if (l0.mode === "tailscale") l0LoadTs();
+  l0LoadTs();
 }
 
-// ---------- 開く前の確認（ハンバーガーメニュー／0+Kキーから） ----------
-function openLaunch0Confirm() {
+// ---------- Launch-0を開く（ハンバーガーメニューから）。確認の画面は挟まず、すぐ開く ----------
+// 開いた直後は「接続方法・画面の選択」の画面で、「やめる」を押せば何も起きずに画面1へ戻る。
+// スマホからの操作は、QRの読み取り・パスワード・PCでの許可がそろわない限り始まらない。
+async function openLaunch0Confirm() {
   if (typeof IS_LAUNCH0 !== "undefined" && IS_LAUNCH0) return;
   if (!l0PagesWithTiles().length) { showToast("ボタンがある画面がないため、Launch-0は使えません"); return; }
-  modalBodyEl.innerHTML = `
-    <h2 style="font-size:17px;font-weight:700;margin-bottom:12px;">📱 Launch-0を開きますか？</h2>
-    <div class="path-preview" style="line-height:1.8;white-space:normal;">
-      スマホ（iPhone）からこのPCのボタンを押せるようにする画面です。<br>
-      ・いま開いているLaunch-Kの画面（画面1〜）やタイマー・使い方は、すべて閉じます。<br>
-      ・接続を終えるまで、PCで開くのはLaunch-0だけです。ボタンの編集もできません。<br>
-      ・同じWi-Fiのときだけ使えます。公共のWi-Fiでは使わないでください。<br>
-      ・スマホで押したボタンは、PCで実際に実行されます。
-    </div>
-    <div class="modal-actions">
-      <button class="btn default dialog-default" id="l0ConfirmNo">キャンセル</button>
-      <button class="btn primary" id="l0ConfirmYes">開く</button>
-    </div>`;
-  document.getElementById("l0ConfirmNo").addEventListener("click", closeModal);
-  document.getElementById("l0ConfirmYes").addEventListener("click", async () => {
-    closeModal();
-    try { await window.api.openLaunch0(); } catch (e) { showToast("Launch-0を開けませんでした"); }
-  });
-  overlayEl.classList.add("show");
-  document.getElementById("l0ConfirmNo").focus();
+  if (l0OpeningNow) return; // 連打・押しっぱなしで何度も開かない
+  l0OpeningNow = true;
+  try { await window.api.openLaunch0(); } catch (e) { showToast("Launch-0を開けませんでした"); }
+  setTimeout(() => { l0OpeningNow = false; }, 1500);
 }
+let l0OpeningNow = false;
 
-// ---------- 0 + K の同時押しで Launch-0 を開く ----------
-// ・物理キー（event.code）で判定するので、半角/全角・大文字/小文字・IMEの状態に関係なく反応する
-// ・数字キーの0もテンキーの0も可
-// ・Ctrl/Alt/Winが押されていると無視（Ctrl+Alt+Shift+0 などのショートカットと区別）。Shiftは許可（大文字のK）
-// ・入力欄・ショートカット登録中・ダイアログ表示中は無効。確認ダイアログを必ず挟む
-function l0InstallHotkey() {
-  const held = { zero: 0, k: 0 }; // 押した時刻（0なら押していない）
-  const WINDOW_MS = 700;
-  const isTyping = () => {
-    const a = document.activeElement;
-    if (!a) return false;
-    const tag = (a.tagName || "").toUpperCase();
-    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || a.isContentEditable === true;
-  };
-  const anyDialogOpen = () => !!document.querySelector(".overlay.show");
-  const isZero = (c) => c === "Digit0" || c === "Numpad0";
+// ---------- Enterキー：接続の準備の画面は「QRを表示」、許可の画面は「許可」 ----------
+function l0InstallEnterKey() {
   document.addEventListener("keydown", (e) => {
-    if (e.repeat) return;
-    if (e.ctrlKey || e.altKey || e.metaKey) { held.zero = 0; held.k = 0; return; } // Shiftは許可（Shift+K・CapsLockの大文字もOK）
-    const zero = isZero(e.code);
-    const k = e.code === "KeyK";
-    if (!zero && !k) {
-      if (e.key === "Shift" || e.key === "CapsLock") return; // 修飾キー（Shift/CapsLock）を押しても、組み合わせは途切れさせない
-      held.zero = 0; held.k = 0; return;
+    if (e.key !== "Enter" || e.isComposing || e.repeat) return;     // 日本語入力の確定のEnter・押しっぱなしは無視
+    if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    if (l0.phase === "pending") {
+      const allow = document.getElementById("l0Allow");
+      if (!allow || allow.disabled) return;
+      e.preventDefault(); e.stopPropagation();                       // どのボタンにフォーカスがあっても、Enterは「許可」
+      allow.click();
+      return;
     }
-    if (isTyping() || anyDialogOpen() || recordingHotkey) return;
-    const t = Date.now();
-    if (zero) held.zero = t;
-    if (k) held.k = t;
-    if (held.zero && held.k && Math.abs(held.zero - held.k) <= WINDOW_MS) {
-      held.zero = 0; held.k = 0;
-      e.preventDefault();
-      openLaunch0Confirm();
-    }
+    if (l0.phase !== "select" || l0.busy) return;
+    const btn = document.getElementById("l0QrBtn");
+    if (!btn || btn.disabled) return;                                // Tailscaleが使えない・ボタンがない画面では何もしない
+    e.preventDefault(); e.stopPropagation();                         // 「やめる」などにフォーカスがあっても、そのボタンは押さない
+    l0Begin();
   }, true);
-  document.addEventListener("keyup", (e) => {
-    if (isZero(e.code)) held.zero = 0;
-    if (e.code === "KeyK") held.k = 0;
-  }, true);
-  window.addEventListener("blur", () => { held.zero = 0; held.k = 0; });
 }

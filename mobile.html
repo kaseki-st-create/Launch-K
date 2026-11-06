@@ -91,8 +91,8 @@ input.otp {
 }
 .tile { touch-action: none; }
 .tile:active { transform: scale(0.94); filter: brightness(0.88); }
-/* 長押しの途中：0.2秒たつと、枠が少しずつ白く縁取られていく（0.75秒で名前が出る） */
-.tile.charging { animation: lpcharge 550ms linear forwards; }
+/* 長押しの途中：0.2秒たつと、枠が少しずつ白く縁取られていく（0.67秒で名前が出る） */
+.tile.charging { animation: lpcharge 470ms linear forwards; }
 @keyframes lpcharge { from { box-shadow: inset 0 0 0 0 rgba(255,255,255,0); } to { box-shadow: inset 0 0 0 6px rgba(255,255,255,0.65); } }
 .tile.lp-done { animation: lpdone 260ms ease; }
 @keyframes lpdone { 0% { transform: scale(1.07); } 100% { transform: scale(1); } }
@@ -142,6 +142,12 @@ input.otp {
 #drawer.on { transform: translateX(0); visibility: visible; box-shadow: -10px 0 30px rgba(0,0,0,0.4); }
 #drawer h2 { font-size: 12px; color: #8B92A0; margin: 8px 0 8px; font-weight: 600; letter-spacing: 0.5px; }
 #pageList { overflow-y: auto; flex: 1 1 auto; }
+#secBox { flex: none; margin: 4px 0 12px; padding: 10px 12px; border-radius: 12px; background: #262B35; border: 1px solid #2B303A; font-size: 12.5px; line-height: 1.55; color: #C9CED8; }
+#secBox .row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+#secBox .row span:first-child { color: #8B92A0; flex: none; }
+#secBox .row span:last-child { text-align: right; word-break: break-word; }
+#secBox .ok { color: #5BD68A; font-weight: 700; }
+#secBox .warn { color: #FFB238; font-weight: 700; }
 .pgbtn { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 14px 14px; margin-bottom: 8px; border-radius: 12px; border: 1px solid #2B303A; background: #262B35; color: #EDEFF2; font-size: 16px; font-family: inherit; }
 .pgbtn.cur { background: #FFB238; color: #14161B; border-color: #FFB238; font-weight: 700; }
 .confirmBack { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 30; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; padding: 24px; }
@@ -160,37 +166,15 @@ input.otp {
     <noscript><p>JavaScriptが無効です。Safariの設定でJavaScriptを有効にしてください。</p></noscript>
   </div>
 
-  <div id="s-caution" class="screen center">
-    <div class="card">
-      <h1>📱 Launch-K リモート操作</h1>
-      <p>このスマホから、PCのLaunch-Kのボタンを押せるようにします。</p>
-      <ul id="cautionLan">
-        <li>押したボタンは、PCで実際に実行されます。</li>
-        <li>PCと同じWi-Fiのときだけ使えます。公共のWi-Fiでは使わないでください。</li>
-        <li>通信は暗号化されません。他の人が使うWi-Fiでは使用しないでください。</li>
-        <li>動作の実行中は、完了するまで切断できません。</li>
-        <li>終わったら、メニュー（☰）の「接続を切断」を押してください。</li>
-      </ul>
-      <ul id="cautionTs" style="display:none;">
-        <li>押したボタンは、PCで実際に実行されます。</li>
-        <li>この通信は、Tailscaleで暗号化されています。PCと同じアカウントの端末だけが接続できます。</li>
-        <li>使っている間は、iPhoneのTailscaleをオンのままにしてください。</li>
-        <li>動作の実行中は、完了するまで切断できません。</li>
-        <li>終わったら、メニュー（☰）の「接続を切断」を押してください。</li>
-      </ul>
-      <label class="check"><input type="checkbox" id="chk"><span>上記を理解しました</span></label>
-      <button class="btn" id="cautionNext" disabled>次へ</button>
-      <p class="small" style="margin-top:14px;" id="diag"></p>
-    </div>
-  </div>
-
   <div id="s-otp" class="screen center">
     <div class="card">
       <h1>パスワードを入力</h1>
-      <p>PCに表示されている、6文字のパスワードを入力してください。パスワードは30秒ごとに新しくなります。</p>
+      <p>PCに表示されている、6文字のパスワード（英小文字4文字＋数字2文字）を入力してください。パスワードは45秒ごとに新しくなります。</p>
       <input class="otp" id="otp" type="text" inputmode="text" maxlength="6" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="••••••">
       <div class="msg" id="otpMsg"></div>
       <button class="btn" id="otpGo">接続する</button>
+      <p class="small" style="margin-top:14px;">押したボタンは、PCで実際に実行されます。使っている間は、iPhoneのTailscaleをオンのままにしてください。終わったら、メニュー（☰）の「接続を切断」を押してください。</p>
+      <p class="small" style="margin-top:10px;" id="diag"></p>
     </div>
   </div>
 
@@ -221,6 +205,8 @@ input.otp {
 <div id="drawer">
   <h2>画面を切り替え</h2>
   <div id="pageList"></div>
+  <h2>接続の安全</h2>
+  <div id="secBox"></div>
   <button class="btn danger" id="disconnectBtn">接続を切断</button>
 </div>
 <div class="confirmBack" id="confirmBack">
@@ -269,12 +255,7 @@ input.otp {
   function storeDel(k) { try { window.sessionStorage.removeItem(k); } catch (e) { /* 無視 */ } }
 
   var K = param("k");
-  // サーバーが埋め込んだ接続方法（"tailscale" か "lan"）
-  var MODE = "lan";
-  (function () {
-    var m = document.querySelector('meta[name="lk-mode"]');
-    if (m && m.getAttribute("content") === "tailscale") MODE = "tailscale";
-  })();
+  var secInfo = null, secInfoAt = 0, secTimer = null; // PCから届いた「接続の安全」の情報と、受け取った時刻
   var execBusy = false, execMulti = false; // PCで実行中の操作／そのうちマルチ操作があるか
   // QRで開いたとき、サーバーがこのページに埋め込んだ「パスワード入力用の許可証」（置き換え文字は、置き換えられないよう分けて書く）
   var TICKET = "";
@@ -297,8 +278,11 @@ input.otp {
   var lastOkAt = Date.now(); // PCから最後に応答があった時刻
   var lostShown = false, probing = false, wdTimer = null;
   var bannerKind = "";
-  var STALE_MS = 25000, LOST_MS = 75000;
-  var LONGPRESS_MS = 750;    // これ以上押し続けると「長押し」＝名前を表示する（それより短ければ通常のタップ）
+  var STALE_MS = 120000, LOST_MS = 360000; // 無応答がこれだけ続くと「途切れています」の表示／切断。PC側（remote.js の STALE_AFTER_MS・DROP_AFTER_MS）と同じ値にする
+  var PRE_LOST_MS = 25000;   // まだ操作画面になる前（PCの許可待ちなど）に、PCから応答が無いまま、これだけたったら確認する
+  var PROBE_MS = 5000;       // パスワード入力画面で、PCがまだ待っているかを確かめる間隔
+  var PROBE_FAILS = 3;       // 連続でこれだけ届かなければ「PCに届かない」と表示する
+  var LONGPRESS_MS = 670;    // これ以上押し続けると「長押し」＝名前を表示する（それより短ければ通常のタップ）
   var CHARGE_AFTER_MS = 200; // 長押しの途中経過の表示を始めるまで
   var MOVE_LIMIT = 12;       // 押している間に指がこれ以上動いたら、タップでも長押しでもない（取り消し）
   var press = null, tipTimer = null;
@@ -317,8 +301,11 @@ input.otp {
     "app-quit": "Launch-Kが終了しました。",
     "abuse": "操作が多すぎたため、切断しました。",
     "denied": "PCで許可されませんでした。",
+    "cancel": "PCでLaunch-0が閉じられました（接続の準備が取りやめられました）。",
+    "wait-timeout": "PCで、接続の待ち時間が過ぎたため、Launch-0が閉じられました。",
+    "unreachable": "PCに届きません。PCでLaunch-0が閉じられたか、PCまたはiPhoneのTailscaleがオフになっている可能性があります。",
     "approval-timeout": "PCで許可されなかったため、時間切れになりました。",
-    "lost": "通信が一定時間途切れたため、切断しました。",
+    "lost": "通信が一定時間（約6分）途切れたため、切断しました。PCやiPhoneのTailscaleがオンか、電波の状態を確認してください。",
     "identity": "この端末を、PCと同じアカウントの端末と確認できなくなったため、切断しました。",
     "tailscale-down": "PCのTailscaleが止まったため、切断しました。",
     "error": "PC側に問題が起きたため、切断しました。",
@@ -360,10 +347,9 @@ input.otp {
     document.addEventListener("visibilitychange", onVisibility);
 
     installPress();
-    $("cautionLan").style.display = MODE === "tailscale" ? "none" : "";
-    $("cautionTs").style.display = MODE === "tailscale" ? "" : "none";
-    $("chk").addEventListener("change", function () { $("cautionNext").disabled = !$("chk").checked; });
-    $("cautionNext").addEventListener("click", function () { showScreen("s-otp"); setTimeout(function () { try { $("otp").focus(); } catch (e) { /* 無視 */ } }, 50); });
+    // 回線が切れた／戻ったときは、すぐ状態を確かめる
+    window.addEventListener("offline", function () { if (!ended) setNet(true); });
+    window.addEventListener("online", function () { if (!ended) { sendPing(); probeWait(); } });
     $("otpGo").addEventListener("click", doAuth);
     $("otp").addEventListener("keydown", function (e) { if (e.key === "Enter") doAuth(); });
     $("waitCancel").addEventListener("click", function () { post("/api/bye", {}).then(function () { finish("user-phone"); }, function () { finish("user-phone"); }); });
@@ -391,10 +377,46 @@ input.otp {
       // ページを再読み込みした場合など：続きから
       connect();
     } else if (TICKET || K) {
-      showScreen("s-caution");
+      showOtpScreen();
     } else {
       showEnd("このURLは使えません", "PCのLaunch-0に表示されたQRコードを、もう一度読み取ってください。");
     }
+  }
+
+  // ---------- パスワード入力画面：PCがまだ待っているかを見守る ----------
+  // この画面ではPCとの常時接続が無いので、PCで「やめる／戻る」を押されたり、Launch-0が閉じたりしても気づけない。
+  // そこで、数秒おきに /api/probe で確かめ、届かなければ分かりやすく知らせる。
+  var otpProbeTimer = null, probeFailCount = 0, probeBusy = false;
+  function showOtpScreen() {
+    showScreen("s-otp");
+    probeFailCount = 0;
+    if (otpProbeTimer) clearInterval(otpProbeTimer);
+    otpProbeTimer = setInterval(probeWait, PROBE_MS);
+    setTimeout(function () { try { $("otp").focus(); } catch (e) { /* 無視 */ } }, 50);
+  }
+  function stopOtpProbe() {
+    if (otpProbeTimer) { clearInterval(otpProbeTimer); otpProbeTimer = null; }
+  }
+  function probeWait() {
+    if (ended || sid || !otpProbeTimer || probeBusy || $("otpGo").disabled) return; // パスワード送信中は確認しない（送信で状態が変わるため）
+    if (!/\bon\b/.test($("s-otp").className)) return;
+    probeBusy = true;
+    withTimeout(post("/api/probe", { k: TICKET || K }), 6000).then(function (j) {
+      probeBusy = false;
+      if (ended || sid || $("otpGo").disabled) return;
+      if (j && j.ok) { probeFailCount = 0; return; }
+      var err = j && j.error;
+      if (err === "token") { stopOtpProbe(); showEnd("QRコードの有効期限が切れました", "PCのQRコードは45秒ごとに新しくなります。もう一度、PCに表示されているQRコードを読み取ってください。"); return; }
+      if (err === "busy") { stopOtpProbe(); showEnd("使用中です", "すでに別の端末が接続中です。PCの表示を確認してください。"); return; }
+      if (err === "closed") { stopOtpProbe(); showEnd("PCが待っていません", "PCでLaunch-0の接続の準備が終了しました。PCでもう一度QRコードを表示してから、読み取ってください。"); return; }
+      probeFailCount += 1;
+      if (probeFailCount >= PROBE_FAILS) { stopOtpProbe(); showEnd("PCに届きません", REASONS.unreachable); }
+    }, function () {
+      probeBusy = false;
+      if (ended || sid || $("otpGo").disabled) return;
+      probeFailCount += 1;
+      if (probeFailCount >= PROBE_FAILS) { stopOtpProbe(); showEnd("PCに届きません", REASONS.unreachable); }
+    });
   }
 
   function layoutRoot() {
@@ -424,13 +446,14 @@ input.otp {
 
   function doAuth() {
     var v = $("otp").value.replace(/\s+/g, "").toLowerCase();
-    if (v.length !== 6) { setText("otpMsg", "6文字で入力してください"); return; }
+    if (!/^[a-z]{4}[0-9]{2}$/.test(v)) { setText("otpMsg", "英小文字4文字＋数字2文字（合計6文字）で入力してください"); return; }
     setText("otpMsg", "");
     $("otpGo").disabled = true;
     post("/api/auth", { k: TICKET || K, otp: v }).then(function (j) {
       $("otpGo").disabled = false;
       if (j && j.ok && j.sid) {
         sid = j.sid;
+        stopOtpProbe();
         storeSet("lk_sid", sid);
         try { history.replaceState(null, "", "/?sid=" + encodeURIComponent(sid)); } catch (e) { /* 無視 */ }
         $("otp").value = "";
@@ -439,14 +462,14 @@ input.otp {
       }
       var err = j && j.error;
       if (err === "otp") setText("otpMsg", "パスワードが違います（あと" + j.left + "回）。PCに表示されている最新のものを入力してください");
-      else if (err === "locked") { showEnd("入力を3回間違えました", "安全のため、PCのQRコードとパスワードを作り直しました。QRコードをもう一度読み取ってください。"); }
-      else if (err === "busy") showEnd("使用中です", "すでに別の端末が接続中か、PCが接続を待っていません。");
+      else if (err === "locked") { stopOtpProbe(); showEnd("入力を3回間違えました", "安全のため、PCのQRコードとパスワードを作り直しました。QRコードをもう一度読み取ってください。"); }
+      else if (err === "busy") { stopOtpProbe(); showEnd("使用中です", "すでに別の端末が接続中か、PCが接続を待っていません。"); }
       else if (err === "rate") setText("otpMsg", "試行回数が多すぎます。少し待ってからやり直してください");
-      else if (err === "token") showEnd("QRコードの有効期限が切れました", "PCのQRコードは30秒ごとに新しくなります。もう一度、PCに表示されているQRコードを読み取ってください。");
+      else if (err === "token") { stopOtpProbe(); showEnd("QRコードの有効期限が切れました", "PCのQRコードは45秒ごとに新しくなります。もう一度、PCに表示されているQRコードを読み取ってください。"); }
       else setText("otpMsg", "接続できませんでした");
     }, function (e) {
       $("otpGo").disabled = false;
-      setText("otpMsg", "PCに届きません。同じWi-Fiにつながっているか確認してください");
+      setText("otpMsg", "PCに届きません。iPhoneのTailscaleがオンか、PCでLaunch-0が開いたままか確認してください");
     });
   }
 
@@ -517,7 +540,8 @@ input.otp {
   }
 
   // ---------- 通信が途切れていないかの見張り ----------
-  // 20秒応答がなければ「途切れています」、60秒たつと確認して、届かなければスマホ自身が切断表示にする。
+  // 120秒応答がなければ「途切れています」、360秒たつと確認して、届かなければスマホ自身が切断表示にする。
+  // まだ操作画面になる前（PCの許可待ち）は、PCが消えたまま待ち続けないよう、25秒で確認する。
   function markOk() {
     lastOkAt = Date.now();
     if (lostShown) { lostShown = false; if (bannerKind === "lost") hideBanner(); }
@@ -526,27 +550,30 @@ input.otp {
     return Promise.race([p, new Promise(function (resolve, reject) { setTimeout(function () { reject(new Error("timeout")); }, ms); })]);
   }
   function watchdog() {
-    if (ended || !snap) return;
+    if (ended) return;
     var silent = Date.now() - lastOkAt;
+    if (!snap) { if (sid && silent > PRE_LOST_MS) probe(true); return; }
     if (silent > LOST_MS) { probe(); return; }
     if (silent > STALE_MS && !lostShown) { lostShown = true; showBanner("通信が途切れています…", false, "lost"); }
   }
-  function probe() {
+  function probe(pre) {
     if (probing) return;
     probing = true;
+    var bad = pre ? "unreachable" : "lost";
     withTimeout(post("/api/ping", { hidden: document.hidden }), 8000).then(function (j) {
       probing = false;
       if (j && j.ok) { markOk(); return; }
       if (j && (j.__status === 401 || j.__status === 403)) { finish(j.reason || "session"); return; }
-      finish("lost");
-    }, function () { probing = false; finish("lost"); });
+      finish(bad);
+    }, function () { probing = false; finish(bad); });
   }
 
   // ---------- PCからのメッセージ ----------
   function onMessage(m) {
     switch (m.type) {
       case "pending": showScreen("s-wait"); break;
-      case "ready": onReady(m); break;
+      case "ready": setSecInfo(m.info); onReady(m); break;
+      case "info": setSecInfo(m.info); break;
       case "paused": paused = !!m.paused; applyPaused(); break;
       case "state": if (snap && m.state) { snap.states = m.state; if (!ended) renderGrid(); } break;
       case "tapres": onTapResult(m); break;
@@ -704,7 +731,7 @@ input.otp {
       }
       svg = safeSvg(svg);
       var fg, bg;
-      if (off && ic.toggle) { fg = "#FF6B5E"; bg = "#FF6B5E33"; }
+      if (off && ic.toggle && String(ic.toggle).indexOf("snd:") !== 0) { fg = "#FF6B5E"; bg = "#FF6B5E33"; } // サウンドの「オフ」は、本体の色はそのまま（斜線だけが赤い）
       else if (ic.filled) { fg = safeColor(ic.fgFilled, "#FFFFFF"); bg = color; }
       else { fg = color; bg = color + "26"; }
       chip.style.background = bg;
@@ -752,13 +779,59 @@ input.otp {
     post("/api/page", { page: snap.pages[idx].index }).then(function () {}, function () {});
   }
   function setSub(n) { subPage = n; renderGrid(); }
+  // ---------- ☰の中の「接続の安全」表示（PCから届いた情報と、このスマホ自身が見ている通信状態） ----------
+  function fmtLeft(sec) {
+    if (!(sec >= 0)) return "-";
+    if (sec < 90) return "約" + Math.max(1, Math.round(sec)) + "秒";
+    if (sec >= 5400) return "約" + (Math.round(sec / 360) / 10) + "時間";
+    return "約" + Math.round(sec / 60) + "分";
+  }
+  function routeText(kind) {
+    if (kind === "direct") return "直接つながっています（direct）";
+    if (kind === "relay") return "中継サーバー経由（relay）";
+    if (kind === "peer-relay") return "別の端末を経由（relay）";
+    return "確認中";
+  }
+  function secRow(label, valueNode) {
+    var row = document.createElement("div"); row.className = "row";
+    var a = document.createElement("span"); a.textContent = label;
+    var b = document.createElement("span");
+    if (typeof valueNode === "string") b.textContent = valueNode; else b.appendChild(valueNode);
+    row.appendChild(a); row.appendChild(b);
+    return row;
+  }
+  function badge(text, cls) { var s = document.createElement("span"); s.className = cls; s.textContent = text; return s; }
+  function applySec() {
+    var box = $("secBox");
+    if (!box) return;
+    while (box.firstChild) box.removeChild(box.firstChild);
+    box.appendChild(secRow("通信", badge("🔒 Tailscaleで暗号化", "ok")));
+    box.appendChild(secRow("接続できる端末", "PCと同じアカウントの端末だけ"));
+    box.appendChild(secRow("接続先のPC", secInfo && secInfo.pc ? secInfo.pc : "-"));
+    box.appendChild(secRow("経路", routeText(secInfo ? secInfo.route : "")));
+    var bad = lostShown || (Date.now() - lastOkAt > 15000);
+    box.appendChild(secRow("通信状態", bad ? badge("途切れています", "warn") : badge("正常", "ok")));
+    if (secInfo) {
+      var el = (Date.now() - secInfoAt) / 1000;
+      box.appendChild(secRow("操作がないとき", "あと" + fmtLeft(secInfo.idleLeft - el) + "で自動切断"));
+      box.appendChild(secRow("最大の接続時間", "あと" + fmtLeft(secInfo.maxLeft - el)));
+    }
+  }
+  function setSecInfo(info) {
+    if (!info || typeof info !== "object") return;
+    secInfo = { pc: String(info.pc || "").slice(0, 60), route: String(info.route || ""), idleLeft: Number(info.idleLeft), maxLeft: Number(info.maxLeft) };
+    secInfoAt = Date.now();
+    if (/\bon\b/.test($("drawer").className)) applySec();
+  }
   function openDrawer(on) {
+    if (secTimer) { clearInterval(secTimer); secTimer = null; }
+    if (on) { applySec(); secTimer = setInterval(applySec, 1000); }
     if (on) { endPress(false); hideNameTip(); }
     $("drawer").className = on ? "on" : "";
     $("drawerBack").className = on ? "on" : "";
   }
 
-  // ---------- 押し方の区別：タップ（0.75秒未満）／長押し（0.75秒以上で名前を表示） ----------
+  // ---------- 押し方の区別：タップ（0.67秒未満）／長押し（0.67秒以上で名前を表示） ----------
   function tileEl(id) {
     var list = $("grid").children;
     for (var i = 0; i < list.length; i++) if (list[i].getAttribute("data-id") === id) return list[i];
@@ -875,6 +948,7 @@ input.otp {
     busy: "PCが処理中です。少し待ってください",
     multibusy: "マルチ操作の実行中は、ほかのボタンを押せません",
     state: "まだ接続できていません",
+    stalled: "通信が途切れています。つながるまで少しお待ちください",
     abuse: "操作が多すぎます"
   };
   function onTap(t, el) {
@@ -963,6 +1037,7 @@ input.otp {
 
   function showEnd(title, text) {
     ended = true;
+    stopOtpProbe();
     setText("endTitle", title);
     setText("endText", text);
     showScreen("s-end");
@@ -970,19 +1045,20 @@ input.otp {
   function finish(reason, fromPc) {
     if (ended) return;
     ended = true;
+    stopOtpProbe();
     if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
     if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
     if (es) { try { es.close(); } catch (e) { /* 無視 */ } es = null; }
     try { if (wakeLock && wakeLock.release) wakeLock.release(); } catch (e) { /* 無視 */ }
     // 画面に出ていたボタンの情報は、すべて消す（切断後に操作できない・内容が残らない）
     endPress(false); hideNameTip();
-    snap = null; sid = ""; pendingTaps = {}; execBusy = false; execMulti = false;
+    snap = null; sid = ""; pendingTaps = {}; execBusy = false; execMulti = false; secInfo = null;
     $("grid").innerHTML = ""; $("pageList").innerHTML = "";
     storeDel("lk_sid");
     try { history.replaceState(null, "", "/"); } catch (e) { /* 無視 */ }
     openDrawer(false);
     $("confirmBack").className = "confirmBack";
-    setText("endTitle", reason === "user-phone" ? "切断しました" : "接続が終了しました");
+    setText("endTitle", reason === "user-phone" ? "切断しました" : reason === "unreachable" ? "PCに届きません" : "接続が終了しました");
     setText("endText", REASONS[reason] || "接続が終了しました。");
     showScreen("s-end");
   }

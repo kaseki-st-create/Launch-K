@@ -4,6 +4,7 @@ const fs = require("fs");
 const { exec, execFile, spawn } = require("child_process");
 const native = require("./native"); // koffiによるuser32.dll直接呼び出し（利用不可ならnative.availableがfalseになる）
 const nativeSnap = require("./native-snap"); // 画面分割（スナップ）専用のkoffi実装。失敗時はPowerShell方式にフォールバック
+const nativeAudio = require("./native-audio"); // マイク／スピーカーのミュート専用のkoffi実装（同じkoffi）。失敗時はPowerShell方式にフォールバック
 const updater = require("./updater"); // 自動アップデート（GitHub Releases）。開発中や読み込み失敗時は何もしない
 const { createRemote } = require("./remote"); // Launch-0（スマホ操作）の通信。ボタンIDだけを受け取る
 const tailscale = require("./tailscale"); // Tailscale（VPN）との連携。接続相手が同じアカウントの端末かの確認など
@@ -1542,6 +1543,15 @@ const BROWSER_PROCESS_NAMES = new Set([
 // いま前面にあるウィンドウのプロセス名（拡張子なし・小文字）を返す。取れなければ null。
 function getForegroundProcessName() {
   if (process.platform !== "win32") return Promise.resolve(null);
+  // まず、koffiで直接調べる（PowerShellを起動しないので、すぐ返る）。
+  // 取れなかったとき（管理者権限のアプリなど）は、従来のPowerShell方式で確かめ直す。
+  if (native.processNameAvailable) {
+    const quick = native.getForegroundProcessName();
+    if (quick) return Promise.resolve(quick);
+  }
+  return getForegroundProcessNamePowerShell();
+}
+function getForegroundProcessNamePowerShell() {
   const defScript =
     "Add-Type -Language CSharp -TypeDefinition " +
     "'using System; using System.Runtime.InteropServices; " +
@@ -2090,6 +2100,15 @@ const CORE_AUDIO_CS =
 const CORE_AUDIO_DEF_SCRIPT = `Add-Type -Language CSharp -TypeDefinition '${CORE_AUDIO_CS.replace(/'/g, "''")}'; `;
 
 function toggleMicMute() {
+  // まず、koffiで直接Core Audioを呼ぶ（PowerShellを起動しないので速い）。何か失敗したら、従来のPowerShell方式で行う。
+  if (nativeAudio.available) {
+    try {
+      return Promise.resolve({ muted: nativeAudio.toggleMicMute() });
+    } catch (e) { /* 従来の方式へ */ }
+  }
+  return toggleMicMutePowerShell();
+}
+function toggleMicMutePowerShell() {
   const defScript = CORE_AUDIO_DEF_SCRIPT;
   // $ErrorActionPreference='Stop'を付けて明示的にtry/catchすることで、セッション経由でも
   // 例外発生時に必ず「ERROR:メッセージ」という判定可能な文字列が出力されるようにする
@@ -2118,6 +2137,14 @@ ipcMain.handle("system:mic", async () => {
 // スピーカーとマイクの「いまの実際のミュート状態」を返す。分からないものは null。
 // 例）{ speaker: true, mic: false }
 async function readMuteStates() {
+  if (nativeAudio.available) {
+    try { return nativeAudio.readStates(); } catch (e) { /* 従来の方式へ */ }
+  }
+  const r = await readMuteStatesPowerShell();
+  r.slow = true; // PowerShell方式は重いので、呼び出し側は読む間隔を長めにする
+  return r;
+}
+async function readMuteStatesPowerShell() {
   const callScript =
     "$ErrorActionPreference='Stop'; try { " +
     "Write-Output ('SPK=' + [AudioMuteHelper]::GetMuteState(0, 0) + ';MIC=' + [AudioMuteHelper]::GetMuteState(1, 1)) " +
@@ -2428,8 +2455,7 @@ function openLaunch0() {
   let pos = null;
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      const [w, h] = mainWindow.getContentSize();
-      size = { width: Math.max(360, w), height: Math.max(300, h) };
+      // 大きさは、メイン画面・画面2以降と同じ「初期サイズ」にする（メイン画面を大きくしていても、そのサイズは引き継がない）。位置だけ引き継ぐ。
       pos = mainWindow.getPosition();
     }
   } catch (e) { /* 既定の大きさのまま */ }
@@ -2674,7 +2700,14 @@ ipcMain.on("remote:tapResult", (event, seq, ok, msg) => {
 ipcMain.on("remote:pushState", (event, state) => {
   if (!isLaunch0Sender(event) || !remote || !state || typeof state !== "object") return;
   const pick = (v) => (v === true ? true : v === false ? false : null);
-  remote.pushState({ speaker: pick(state.speaker), mic: pick(state.mic) });
+  const out = { speaker: pick(state.speaker), mic: pick(state.mic) };
+  // サウンドボタンごとの状態（"snd:ボタンID" → true/false）。キーの形と個数を確かめてから通す
+  let n = 0;
+  for (const k of Object.keys(state)) {
+    if (n >= 256) break;
+    if (/^snd:[A-Za-z0-9_-]{1,64}$/.test(k) && typeof state[k] === "boolean") { out[k] = state[k]; n += 1; }
+  }
+  remote.pushState(out);
 });
 // 画像アイコンを、スマホ用に小さなPNGにして返す（保存されているボタンに設定された画像だけ）
 ipcMain.handle("launch0:iconData", async (event, tileId) => {
@@ -2778,16 +2811,50 @@ function runCaptureSelector(display, jpegDataUrl, aspect, hint) {
     sel.setBounds(b); // 拡大率の異なる別モニターでも位置・大きさがずれないよう、作成後にもう一度指定する
     let settled = false;
     let fallbackTimer = null;
+    let guardTimer = null;
+    let escOwned = false;       // この範囲選択のためにEscを登録したか（終わったら、登録した分だけ解除する）
+    let refocusCount = 0;
+    const startedAt = Date.now();
+    const CAPTURE_MAX_MS = 120 * 1000; // 何があっても、2分で自動的にキャンセルして元に戻る（操作不能のまま残さない）
+    const cancelSel = () => finish(null);
+    // Escは「このウィンドウがキー入力を受け取っているとき」だけでなく、PC全体で拾う。
+    // アプリのロックの解除などでフォーカスが動いても、Escで必ず戻れるようにするため。
+    // （他のショートカットの再登録で unregisterAll されることがあるので、見張りの中で登録し直す）
+    const ensureEsc = () => {
+      if (settled) return;
+      try {
+        if (!globalShortcut.isRegistered("Escape")) {
+          if (globalShortcut.register("Escape", cancelSel)) escOwned = true;
+        }
+      } catch (e) { /* 登録できなくても、ウィンドウ内のEsc・フォーカスの取り戻しで戻れる */ }
+    };
     const finish = (rect) => {
       if (settled) return;
       settled = true;
       clearTimeout(fallbackTimer);
+      clearInterval(guardTimer);
+      if (escOwned) { try { globalShortcut.unregister("Escape"); } catch (e) { /* 無視 */ } }
       ipcMain.removeListener("capture:done", onDone);
       ipcMain.removeListener("capture:ready", onReady);
       if (!sel.isDestroyed()) sel.destroy();
       resolve(rect || null);
     };
     const showSel = () => { if (!sel.isDestroyed() && !sel.isVisible()) { sel.show(); sel.focus(); } };
+    // 見張り：フォーカスや最前面が奪われていたら取り戻す（ロックの解除・他アプリの割り込みなど）。時間切れなら取りやめる。
+    guardTimer = setInterval(() => {
+      if (settled || sel.isDestroyed()) return;
+      if (Date.now() - startedAt > CAPTURE_MAX_MS) { cancelSel(); return; }
+      ensureEsc();
+      if (!sel.isVisible()) return; // まだ表示前（画像の読み込み待ち）
+      try {
+        sel.setAlwaysOnTop(true, "screen-saver");
+        if (!sel.isFocused() && refocusCount < 60) { refocusCount += 1; sel.show(); sel.focus(); }
+      } catch (e) { /* 無視 */ }
+    }, 400);
+    // ウィンドウ内でのEsc（レンダラーまで届かない場合に備えて、メイン側でも検知する）
+    sel.webContents.on("before-input-event", (event, input) => {
+      if (input.type === "keyDown" && input.key === "Escape") { event.preventDefault(); cancelSel(); }
+    });
     const onDone = (event, rect) => { if (event.sender === sel.webContents) finish(rect); };
     const onReady = (event) => { if (event.sender === sel.webContents) showSel(); };
     ipcMain.on("capture:done", onDone);

@@ -149,6 +149,58 @@ function setTopmostNoActivate(hwnd) {
   }
 }
 
+// ------------------------------------------------------------
+// 前面のウィンドウの「プロセス名」（実行ファイル名・拡張子なし・小文字）をkoffiで取得する。
+// 「ブラウザにだけ送るショートカット（Ctrl+W など）」の安全確認に使う。以前はPowerShellを起動して
+// 調べていたため、そのぶん押してから反応するまで遅かった。
+//   GetForegroundWindow → GetWindowThreadProcessId → OpenProcess（読み取り専用の最小権限）
+//   → QueryFullProcessImageNameW → CloseHandle
+// 取得できなかったとき（管理者権限のアプリなど）は空文字を返す。呼び出し側は、従来のPowerShell方式で確かめ直す。
+// ------------------------------------------------------------
+const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+function createProcessNameReader(koffi, user32lib, kernel32lib) {
+  const getFg = user32lib.func("uintptr_t __stdcall GetForegroundWindow()");
+  const getPid = user32lib.func("uint32 __stdcall GetWindowThreadProcessId(uintptr_t hWnd, _Out_ uint32 *pid)");
+  const openProc = kernel32lib.func("uintptr_t __stdcall OpenProcess(uint32 access, int32 inherit, uint32 pid)");
+  const closeH = kernel32lib.func("int32 __stdcall CloseHandle(uintptr_t h)");
+  const queryName = kernel32lib.func("int32 __stdcall QueryFullProcessImageNameW(uintptr_t h, uint32 flags, _Out_ uint16_t *buf, _Inout_ uint32 *size)");
+  return function readForegroundProcessName() {
+    const hwnd = getFg();
+    if (!hwnd) return "";
+    const pidOut = [0];
+    getPid(hwnd, pidOut);
+    const pid = pidOut[0] >>> 0;
+    if (!pid) return "";
+    const h = openProc(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    if (!h) return "";
+    try {
+      const buf = new Uint16Array(1024);
+      const size = [1024];
+      if (!queryName(h, 0, buf, size)) return "";
+      const len = Math.max(0, Math.min(1024, size[0] | 0));
+      const full = Buffer.from(buf.buffer, buf.byteOffset, len * 2).toString("utf16le");
+      const base = full.split(/[\\/]/).pop() || "";
+      return base.replace(/\.[^.]*$/, "").toLowerCase();
+    } finally {
+      try { closeH(h); } catch (e) { /* 無視 */ }
+    }
+  };
+}
+let readForegroundProcessName = null;
+if (process.platform === "win32") {
+  try {
+    const koffi2 = require("koffi");
+    readForegroundProcessName = createProcessNameReader(koffi2, koffi2.load("user32.dll"), koffi2.load("kernel32.dll"));
+  } catch (e) {
+    readForegroundProcessName = null; // このモジュールの他の機能（キー送信など）には影響しない
+  }
+}
+const processNameAvailable = !!readForegroundProcessName;
+function getForegroundProcessName() {
+  if (!readForegroundProcessName) return "";
+  try { return readForegroundProcessName(); } catch (e) { return ""; }
+}
+
 module.exports = {
   available,
   showWindowHandle,
@@ -161,4 +213,7 @@ module.exports = {
   getForegroundWindowHandle,
   setForegroundWindowHandle,
   isWindowHandle,
+  processNameAvailable,
+  getForegroundProcessName,
+  createProcessNameReader, // テスト用
 };

@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: file:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: file:; media-src 'self' file: data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
 <title>Launch-K</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -490,9 +490,13 @@
   .l0-title span { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-left: 6px; }
   .l0-sub { font-size: 12px; line-height: 1.7; color: var(--text-muted); margin-bottom: 8px; }
   .l0-sub b { color: var(--text); }
-  .l0-acct { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
-  .l0-eye { border: 1px solid var(--border); background: transparent; color: var(--text-muted); border-radius: 8px; padding: 1px 8px; font-size: 11px; line-height: 1.6; cursor: pointer; font-family: inherit; }
-  .l0-eye:hover { color: var(--text); background: var(--panel-alt-solid, rgba(255,255,255,0.06)); }
+  /* アカウント名：伏せ字（または名前）と顔が、ひとつのボタン（どこを押しても表示・非表示が切り替わる） */
+  .l0-acct { display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; max-width: 100%; border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 8px; padding: 1px 8px; font-size: inherit; line-height: 1.6; cursor: pointer; font-family: inherit; text-align: left; }
+  .l0-acct:hover { background: var(--panel-alt-solid, rgba(255,255,255,0.06)); }
+  .l0-acct:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .l0-acct b { font-weight: 700; min-width: 0; overflow-wrap: anywhere; }
+  .l0-dots { opacity: 0.4; letter-spacing: 1px; } /* 伏せ字の●は、少し薄く */
+  .l0-face { flex: none; display: inline-block; min-width: 5.4ch; text-align: center; font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--text-muted); } /* 2つの顔で幅をそろえ、押しても右側がずれないようにする */
   .l0-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
   .l0-pick { display: flex; flex-direction: column; align-items: flex-start; min-width: 96px; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-alt-solid); color: var(--text); font-size: 14px; font-weight: 700; font-family: inherit; cursor: pointer; }
   .l0-pick span { font-size: 11px; font-weight: 500; color: var(--text-muted); margin-top: 2px; }
@@ -503,7 +507,7 @@
   .l0-qrbox { flex: none; margin-right: 14px; background: #fff; border-radius: 8px; padding: 4px; line-height: 0; }
   .l0-qrbox img { image-rendering: pixelated; display: block; } /* 3px/マスのままの大きさ（約110px）。拡大縮小しない方が読み取りやすい */
   .l0-side { flex: 1; min-width: 0; }
-  .l0-otp { font-family: ui-monospace, Consolas, monospace; font-size: 24px; font-weight: 400; letter-spacing: 4px; color: var(--text-muted); margin: 2px 0 6px 0; user-select: all; }
+  .l0-otp { font-family: ui-monospace, Consolas, monospace; font-size: 20px; font-weight: 400; letter-spacing: 4px; color: var(--text-muted); margin: 2px 0 6px 0; user-select: all; }
   .l0-card { border: 1px solid var(--border); background: var(--panel-alt-solid); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
   .l0-big { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
   .l0-status { display: flex; align-items: center; margin-bottom: 10px; font-size: 14px; }
@@ -514,11 +518,6 @@
   .l0-grid > div { flex: 1 1 90px; min-width: 90px; border: 1px solid var(--border); background: var(--panel-alt-solid); border-radius: 10px; padding: 8px 10px; margin: 0 8px 8px 0; }
   .l0-grid span { display: block; font-size: 11px; color: var(--text-muted); }
   .l0-grid b { font-size: 15px; }
-  .l0-modes { display: flex; gap: 8px; margin-bottom: 8px; }
-  .l0-mode { flex: 1; display: flex; flex-direction: column; align-items: flex-start; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-alt-solid); color: var(--text); font-size: 14px; font-weight: 700; font-family: inherit; cursor: pointer; text-align: left; }
-  .l0-mode span { font-size: 11px; font-weight: 500; color: var(--text-muted); margin-top: 2px; }
-  .l0-mode.sel { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
-  .l0-mode.sel span { color: var(--accent-contrast); opacity: 0.8; }
   .l0-ok-note { font-size: 12px; font-weight: 700; color: #3ED67A; margin: 4px 0; }
   .l0-row { display: flex; gap: 8px; margin: 4px 0 8px; }
   .l0-row .btn { padding: 6px 12px; font-size: 12px; }
