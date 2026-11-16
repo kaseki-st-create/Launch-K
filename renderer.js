@@ -121,7 +121,8 @@ const TYPE_META = {
   folder: { label: "フォルダ" },
   volume: { label: "音量" },
   power: { label: "電源" },
-  mic: { label: "マイク" },
+  mic: { label: "マイク（すべてまとめて）" },
+  micdev: { label: "マイク（1台ずつ）" },
   clipboard: { label: "コピー" },
   window: { label: "画面分割" },
   pageswitch: { label: "Launch-K画面切り替え" },
@@ -130,7 +131,6 @@ const TYPE_META = {
   qr: { label: "QRコード" },
   zoom: { label: "ズーム" },
   timer: { label: "タイマー" },
-  discord: { label: "Discord" },
   shortcutKeys: { label: "ショートカット" },
   screenshotFull: { label: "全画面スクショ" },
   multi: { label: "マルチ操作" },
@@ -138,7 +138,7 @@ const TYPE_META = {
 // マルチ操作の中に入れられる動作の種類（無限再帰になる「マルチ操作」自身と、
 // 常時ユーザーの操作待ちで一連の自動実行に向かない「QRコード」表示は除く）
 // マルチ操作の動作に選べない種類：マルチ操作自身・QR・サウンド（サウンドは一時停止／再開・重複なしの管理があるため、単独のボタンだけで使う）
-const SUB_ACTION_TYPES = Object.keys(TYPE_META).filter((k) => k !== "multi" && k !== "qr" && k !== "sound");
+const SUB_ACTION_TYPES = Object.keys(TYPE_META).filter((k) => k !== "multi" && k !== "qr" && k !== "sound" && k !== "micdev");
 // Windows標準の「メモ」（notepad.exe）だけは、新しいウィンドウ・新しいタブを
 // 区別する一般的な起動方法が無いため、専用の判定・選択肢を用意する。
 // 選ばれたのが notepad.exe そのものではなく、デスクトップ等の「メモ帳.lnk」（ショートカット）の
@@ -305,8 +305,10 @@ const CSS_ICONS = {
   book:        { label: "本",           svg: svgWrap(`<path d="M4 5a2 2 0 0 1 2-2h6v18H6a2 2 0 0 1-2-2z"/><path d="M20 5a2 2 0 0 0-2-2h-6v18h6a2 2 0 0 0 2-2z"/>`) },
   wallet:      { label: "財布",         svg: svgWrap(`<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="17" cy="14" r="1.3" fill="currentColor" stroke="none"/>`) },
   money:       { label: "お金",         svg: svgWrap(`<circle cx="12" cy="12" r="9"/><path d="M15 8.5h-4a2 2 0 0 0 0 4h2a2 2 0 0 1 0 4H9"/><path d="M12 6.5v2M12 15.5v2"/>`) },
-  headphones:  { label: "ヘッドフォン", svg: svgWrap(`<path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="3" y="13" width="4" height="6" rx="1.5"/><rect x="17" y="13" width="4" height="6" rx="1.5"/>`) },
-  earphones:   { label: "イヤホン",     svg: svgWrap(`<circle cx="7" cy="6" r="2"/><circle cx="17" cy="6" r="2"/><path d="M7 8v6a3 3 0 0 0 3 3M17 8v6a3 3 0 0 0-3 3"/>`) },
+  headphones:  { label: "ヘッドフォン", svg: svgWrap(`<path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="3" y="13" width="4" height="6" rx="1.5"/><rect x="17" y="13" width="4" height="6" rx="1.5"/>`), toggle: true,
+                 offSvg: svgWrap(`<path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="3" y="13" width="4" height="6" rx="1.5"/><rect x="17" y="13" width="4" height="6" rx="1.5"/><path d="M4 4l16 16" stroke="#FF6B5E"/>`) },
+  earphones:   { label: "イヤホン",     svg: svgWrap(`<circle cx="7" cy="6" r="2"/><circle cx="17" cy="6" r="2"/><path d="M7 8v6a3 3 0 0 0 3 3M17 8v6a3 3 0 0 0-3 3"/>`), toggle: true,
+                 offSvg: svgWrap(`<circle cx="7" cy="6" r="2"/><circle cx="17" cy="6" r="2"/><path d="M7 8v6a3 3 0 0 0 3 3M17 8v6a3 3 0 0 0-3 3"/><path d="M4 4l16 16" stroke="#FF6B5E"/>`) },
   tv:          { label: "テレビ",       svg: svgWrap(`<rect x="3" y="6" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 18v2"/><path d="M8 3l2 3M16 3l-2 3"/>`) },
   speakers2:   { label: "外部スピーカー", svg: svgWrap(`<rect x="3" y="4" width="7" height="16" rx="1.5"/><circle cx="6.5" cy="9" r="1.6"/><circle cx="6.5" cy="15" r="1.6"/><rect x="14" y="4" width="7" height="16" rx="1.5"/><circle cx="17.5" cy="9" r="1.6"/><circle cx="17.5" cy="15" r="1.6"/>`) },
   car:         { label: "車",           svg: svgWrap(`<path d="M4 16l1.5-5A2 2 0 0 1 7.4 9.5h9.2a2 2 0 0 1 1.9 1.5L20 16"/><rect x="3" y="16" width="18" height="4" rx="1.5"/><circle cx="7.5" cy="20" r="1.5"/><circle cx="16.5" cy="20" r="1.5"/>`) },
@@ -338,14 +340,47 @@ const CSS_ICON_GROUPS = [
 //   キーボード・他のアプリ・Windowsの設定でミュートを切り替えた場合に、アイコンが実際と逆になっていた）
 // true=ミュート中 / false=ミュートなし / null=まだ分からない（ミュートなしの見た目にしておく）。
 const audioMuteState = { speaker: null, mic: null };
+// タイマー画面が開いているか。開いている間は、タイマーを開くボタンを少し暗くする（押せるが、「すでに開いています」と知らせる）
+let timerOpen = false;
+function tileOpensTimer(tile) {
+  return !!tile && (tile.type === "timer" || (tile.type === "multi" && Array.isArray(tile.subActions) && tile.subActions.some((x) => x && x.type === "timer")));
+}
 const MUTE_POLL_INTERVAL_MS = 2000; // 画面が見えている間、この間隔でOSの実際の状態を読み直す（2秒。koffiで直接読むので軽い）
 const MUTE_POLL_SLOW_MS = 5000;     // PowerShell方式に戻っているときは、重いので5秒に間引く
 let muteSlow = false;               // 直前の読み取りがPowerShell方式だったか
 let lastMuteReadAt = 0;
 let muteRefreshInFlight = false;
 let muteRefreshTimer = null;
+function isMicTile(t) { return !!t && (t.type === "mic" || t.type === "micdev"); }
 function isMuteStateTile(t) {
-  return !!t && ((t.type === "volume" && t.action === "mute") || t.type === "mic");
+  return !!t && ((t.type === "volume" && t.action === "mute") || isMicTile(t));
+}
+// ---------- マイクの状態（メインプロセスの専用スレッドが2秒ごとに読んだ最新を、ここで受け取る）----------
+// null＝まだ一度も受け取っていない。受け取れていても ok=false／stale=true のときは「不明」（ミュート中とは表示しない）。
+let micSnap = null;
+function micSigOf(ms) {
+  if (!ms) return "null";
+  return (ms.ok ? "1" : "0") + (ms.stale ? "s" : "f") + (Array.isArray(ms.devices) ? ms.devices.map((d) => d.id + ":" + d.state + ":" + d.muted).join(",") : "");
+}
+// このボタンのマイクの状態：muted / open / partial（一部だけミュート）/ none（未接続）/ unselected（マイク未選択）/ unknown（確認できない）/ loading（まだ読んでいない）
+function micState(tile) {
+  const C = window.MicCore;
+  if (!tile || !C || !micSnap) return "loading";
+  if (!micSnap.ok || micSnap.stale || !Array.isArray(micSnap.devices)) return "unknown";
+  if (tile.type === "micdev") {
+    if (!tile.micDeviceId) return "unselected";
+    const d = micSnap.devices.find((x) => x.id === tile.micDeviceId);
+    if (!d || !C.isActive(d)) return "none";
+    return d.muted === true ? "muted" : d.muted === false ? "open" : "unknown";
+  }
+  return C.aggregate(C.allMicTargets(micSnap.devices, tile.micExcludeIds)).state;
+}
+// 押した直後などに、最新の状態をすぐ取り直して表示に反映する
+async function refreshMicNow() {
+  try {
+    const ms = await window.api.micSnapshot();
+    if (ms && micSigOf(ms) !== micSigOf(micSnap)) { micSnap = ms; renderGrid(); }
+  } catch (e) { /* 表示はそのまま */ }
 }
 // 実際の状態を読み、変わっていたときだけ画面を描き直す。
 // ミュート系のボタンが1つも無いときは、何も呼ばない（PowerShellを無駄に起動しない）。
@@ -355,16 +390,23 @@ async function refreshMuteStates() {
   if (muteRefreshInFlight || !tiles.some(isMuteStateTile)) return;
   const sinceStart = Date.now() - APP_STARTED_AT;
   if (sinceStart < MUTE_READ_NOT_BEFORE_MS) { scheduleMuteRefresh(MUTE_READ_NOT_BEFORE_MS - sinceStart + 50); return; }
+  const hasMic = tiles.some(isMicTile);
+  const hasSpk = tiles.some((t) => t && t.type === "volume" && t.action === "mute");
   muteRefreshInFlight = true;
   try {
     lastMuteReadAt = Date.now();
-    const r = await window.api.getMuteStates();
-    if (!r) return;
-    muteSlow = r.slow === true;
     let changed = false;
-    for (const key of ["speaker", "mic"]) {
-      // 取得できなかった（null）ときは、直前の表示をそのまま残す
-      if (typeof r[key] === "boolean" && audioMuteState[key] !== r[key]) { audioMuteState[key] = r[key]; changed = true; }
+    if (hasSpk) {
+      const r = await window.api.getMuteStates();
+      if (r) {
+        muteSlow = r.slow === true;
+        // 取得できなかった（null）ときは、直前の表示をそのまま残す
+        if (typeof r.speaker === "boolean" && audioMuteState.speaker !== r.speaker) { audioMuteState.speaker = r.speaker; changed = true; }
+      }
+    }
+    if (hasMic) {
+      const ms = await window.api.micSnapshot();
+      if (ms && micSigOf(ms) !== micSigOf(micSnap)) { micSnap = ms; changed = true; }
     }
     if (changed) renderGrid();
   } catch (e) { /* 読み取りに失敗しても、表示はそのまま */ } finally {
@@ -378,7 +420,7 @@ function scheduleMuteRefresh(delayMs) {
 // このボタンが「今ミュート中か」（アイコンを「オフ」の見た目にするか）
 function isTileMuted(tile) {
   if (tile.type === "volume" && tile.action === "mute") return audioMuteState.speaker === true;
-  if (tile.type === "mic") return audioMuteState.mic === true;
+  if (tile.type === "mic" || tile.type === "micdev") return micState(tile) === "muted";
   return false;
 }
 // ---------- サウンドボタンの再生状態 ----------
@@ -413,7 +455,7 @@ function isIconOff(tile) {
 // このタイルがそもそも「オン/オフ」の状態を持つ種類か（ミュート系ボタン）。
 // これらは「CSS」アイコンを個別選択する場合、オン用・オフ用の2つを両方選ぶ必要がある。
 function tileHasToggle(tile) {
-  return (tile.type === "volume" && tile.action === "mute") || tile.type === "mic";
+  return (tile.type === "volume" && tile.action === "mute") || tile.type === "mic" || tile.type === "micdev";
 }
 // アイコンに斜線を足した「オフ」用の図柄を作る（オフ用の図柄を持たないアイコン用。サウンドが止まっているとき）
 function svgWithSlash(svg) {
@@ -456,11 +498,10 @@ function defaultCssIconFor(t) {
     case "brightness":
       return t.action === "down" ? "moon" : "sun";
     case "mic":
+    case "micdev":
       return "mic";
     case "zoom":
       return t.action === "out" ? "zoom-out" : "zoom-in";
-    case "discord":
-      return "chatRound";
     case "shortcutKeys":
       return { copy: "layers", cut: "eraser", paste: "clipboard", undo: "rotate-left", redo: "rotate-right", selectAll: "check", save: "file", find: "zoom-in", closeTab: "tab-close", reopenTab: "tab-restore" }[t.action] || "clipboard";
     case "screenshotFull":
@@ -501,7 +542,7 @@ function suggestedColorFor(t) {
     return null;
   }
   if (t.type === "brightness") return t.action === "down" ? "#FFDE59" : "#FF7A45";
-  if (t.type === "mic") return "#3ED67A";
+  if (t.type === "mic" || t.type === "micdev") return "#3ED67A";
   if (t.type === "volume" && t.action === "mute") return "#5B8CFF";
   if (t.type === "timer") return "#FFDE59";
   return null;
@@ -782,7 +823,7 @@ function showToast(msg) {
 }
 
 function toFileUrl(p) {
-  if (!p) return "";
+  if (!p || typeof p !== "string") return ""; // 壊れたデータ（文字列でない値）でも、例外を出して画面全体の描画を止めない
   // アプリのアイコン自動取得ではdata URLをそのまま使うため、素通しする
   if (p.startsWith("data:")) return p;
   let clean = p.replace(/\\/g, "/");
@@ -1094,57 +1135,53 @@ async function persistSettings() {
   applyTheme();
 }
 // ---------- ショートカットキーの重複チェック ----------
-// 起動用：ボタンに登録して、どこからでも押せるキー。OSに登録するので、1か所にしか使えない。
-// 送信用：「Discord等へキー送信」（ボタン単体・マルチ操作の中の動作）で、他のアプリへ送るキー。OSには登録しない。
-//   禁止：起動用 × 起動用 ／ 起動用 × 送信用（送ったキーをLaunch-K自身が受け取ってしまうため）
-//   許可：送信用 × 送信用（同じ操作のボタンを別の画面にも置く、マルチ操作で同じキーを2回送る、など）
+// ボタンに登録して、どこからでも押せるキー（起動用）は、OSに登録するので、全ての画面を通して1か所にしか使えない。
+// Ctrl+Shift+Alt+K は、Launch-0を開くキーとして予約済み（ボタンには登録できない）。
+const LAUNCH0_HOTKEY = "Control+Alt+Shift+K";
+// 比較用の形：大文字小文字・修飾キーの並び順・別名（Ctrl/Control/CommandOrControl など）の違いを同じものとして扱う（main.js と同じ規則）
 function hotkeyNorm(combo) {
-  return String(combo || "").toLowerCase();
+  const parts = String(combo || "").split("+").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const mods = new Set();
+  let key = "";
+  for (const p of parts) {
+    if (p === "ctrl" || p === "control" || p === "commandorcontrol" || p === "cmdorctrl") mods.add("control");
+    else if (p === "alt" || p === "option") mods.add("alt");
+    else if (p === "shift") mods.add("shift");
+    else if (p === "meta" || p === "super" || p === "win" || p === "windows" || p === "cmd" || p === "command") mods.add("meta");
+    else key = p;
+  }
+  return [...["control", "alt", "shift", "meta"].filter((m) => mods.has(m)), key].join("+");
 }
+function isLaunch0Hotkey(combo) { return !!combo && hotkeyNorm(combo) === hotkeyNorm(LAUNCH0_HOTKEY); }
 // ボタン1つが使っているキーの一覧。slot はそのボタンの中で「どの欄か」を区別する名前
-// （"launch"＝起動用、"send"＝ボタン単体の送信キー、"sub:N"＝マルチ操作のN+1番目の動作の送信キー）。
 function hotkeyUsesOfTile(tile) {
   const uses = [];
   if (!tile || typeof tile !== "object") return uses;
   if (tile.hotkey) uses.push({ slot: "launch", kind: "launch", combo: tile.hotkey });
-  if (tile.type === "discord" && tile.sendHotkey) uses.push({ slot: "send", kind: "send", combo: tile.sendHotkey });
-  if (tile.type === "multi" && Array.isArray(tile.subActions)) {
-    tile.subActions.forEach((sub, i) => {
-      if (sub && sub.type === "discord" && sub.sendHotkey) {
-        uses.push({ slot: `sub:${i}`, kind: "send", combo: sub.sendHotkey, subIndex: i });
-      }
-    });
-  }
   return uses;
 }
-function hotkeyUseLabel(use) {
-  if (use.kind === "launch") return "起動用ショートカット";
-  return use.subIndex !== undefined ? `マルチ操作（${use.subIndex + 1}番目の動作）のキー送信` : "キー送信";
-}
+function hotkeyUseLabel() { return "起動用ショートカット"; }
 function hotkeyOwnerLabel(tile) {
   return `画面${(Number(tile.pageIndex) || 0) + 1}の「${tile.name || "無題"}」`;
 }
-// 設定しようとしているキー（combo／種類 kind）が、すでに使われていないか調べる。
+// 設定しようとしているキー（combo）が、すでに使われていないか調べる。
 // editingTile は編集中のボタン（保存前の作業用コピー）、editingSlot はいま設定中の欄。
 // 重複していれば { text: 画面に出す文章 } を返し、問題なければ null。
 function findHotkeyClash(combo, kind, editingTile, editingSlot) {
   const key = hotkeyNorm(combo);
   if (!key) return null;
-  const clashes = (use) => hotkeyNorm(use.combo) === key && (kind === "launch" || use.kind === "launch");
-  const rule = "起動用ショートカットとキー送信は、同じキーにできません。";
+  if (isLaunch0Hotkey(combo)) return { text: "このキー（Ctrl+Shift+Alt+K）は、Launch-0を開くキーとして使われています。ボタンには設定できないので、別のキーを選んでください。" };
+  const clashes = (use) => hotkeyNorm(use.combo) === key;
   // 同じボタンの中の他の欄
   for (const use of hotkeyUsesOfTile(editingTile)) {
     if (use.slot === editingSlot) continue;
-    if (clashes(use)) return { text: `このボタンの${hotkeyUseLabel(use)}と同じキーです。${rule}` };
+    if (clashes(use)) return { text: `このボタンの${hotkeyUseLabel(use)}と同じキーです。` };
   }
   // 他のボタン（全ての画面）
   for (const other of tiles) {
     if (!other || other.id === editingTile.id) continue;
     for (const use of hotkeyUsesOfTile(other)) {
-      if (clashes(use)) {
-        const cross = use.kind !== kind ? rule : "";
-        return { text: `このキーは、${hotkeyOwnerLabel(other)}の${hotkeyUseLabel(use)}で使われています。${cross}` };
-      }
+      if (clashes(use)) return { text: `このキーは、${hotkeyOwnerLabel(other)}の${hotkeyUseLabel(use)}で使われています。` };
     }
   }
   return null;
@@ -1164,20 +1201,16 @@ function validateTileHotkeys(t) {
   return null;
 }
 // 実際にOSへ登録する起動用ショートカットの一覧を作る。
-// 送信用と同じキー、または先に登録済みの起動用と同じキーの起動用は、登録せず blocked に入れる
-// （送信キーを優先する。データはそのまま残し、どのボタンが無効かを画面でお知らせする）。
+// 先に登録済みの起動用と同じキー、またはLaunch-0を開くキーと同じものは、登録せず blocked に入れる
+// （データはそのまま残し、どのボタンが無効かを画面でお知らせする）。
 function computeActiveHotkeys() {
-  const sendSet = new Set();
-  tiles.forEach((t) => {
-    hotkeyUsesOfTile(t).forEach((u) => { if (u.kind === "send") sendSet.add(hotkeyNorm(u.combo)); });
-  });
   const list = [];
   const blocked = [];
   const seen = new Set();
   tiles.forEach((t) => {
     if (!t || !t.hotkey) return;
     const key = hotkeyNorm(t.hotkey);
-    if (sendSet.has(key) || seen.has(key)) {
+    if (isLaunch0Hotkey(t.hotkey) || seen.has(key)) {
       blocked.push(t);
       return;
     }
@@ -1186,19 +1219,14 @@ function computeActiveHotkeys() {
   });
   return { list, blocked };
 }
-// バックアップなどを読み込んだとき、被っている起動用ショートカットを未設定にする（件数を返す）。
-// 送信用と同じ起動用、または先に出てきた起動用と同じ起動用が対象。送信キー同士は被ってよい。
+// バックアップなどを読み込んだとき、被っている起動用ショートカット（先に出てきたものと同じ・Launch-0を開くキーと同じ）を未設定にする（件数を返す）。
 function clearConflictingLaunchHotkeys(list) {
-  const sendSet = new Set();
-  list.forEach((t) => {
-    hotkeyUsesOfTile(t).forEach((u) => { if (u.kind === "send") sendSet.add(hotkeyNorm(u.combo)); });
-  });
   const seen = new Set();
   let cleared = 0;
   list.forEach((t) => {
     if (!t || !t.hotkey) return;
     const key = hotkeyNorm(t.hotkey);
-    if (sendSet.has(key) || seen.has(key)) {
+    if (isLaunch0Hotkey(t.hotkey) || seen.has(key)) {
       t.hotkey = "";
       cleared++;
     } else {
@@ -1232,18 +1260,23 @@ function syncHotkeys(notify = false) {
 // OBS連携は廃止した。以前のバージョンで作ったOBS用のボタン（マルチ操作の中の動作を含む）と、
 // 接続設定（ホスト・ポート・パスワード）を、読み込んだデータから取り除く（メモリ上の処理。保存は呼び出し側）。
 function removeObsLeftovers() {
-  const result = { removedTiles: 0, removedSubs: 0, settingsChanged: false };
+  const result = { removedTiles: 0, removedSubs: 0, removedDiscord: 0, settingsChanged: false };
   if (!Array.isArray(tiles)) tiles = [];
   const before = tiles.length;
-  tiles = tiles.filter((t) => !(t && t.type === "obs"));
+  // Discord（キー送信）も廃止した。OBSと同じ扱いで、古いデータに残っていても取り除く
+  const isGone = (x) => !!x && (x.type === "obs" || x.type === "discord");
+  result.removedDiscord += tiles.filter((t) => t && t.type === "discord").length;
+  tiles = tiles.filter((t) => !isGone(t));
   result.removedTiles = before - tiles.length;
   tiles.forEach((t) => {
     if (t && Array.isArray(t.subActions)) {
       const n = t.subActions.length;
-      t.subActions = t.subActions.filter((sub) => !(sub && sub.type === "obs"));
+      result.removedDiscord += t.subActions.filter((sub) => sub && sub.type === "discord").length;
+      t.subActions = t.subActions.filter((sub) => !isGone(sub));
       result.removedSubs += n - t.subActions.length;
     }
   });
+  if (settings && "l0BlockMicUnmute" in settings) { delete settings.l0BlockMicUnmute; result.settingsChanged = true; } // 「スマホからはミュートだけ」の設定は廃止した
   ["obsHost", "obsPort", "obsPassword"].forEach((key) => {
     if (settings && key in settings) {
       delete settings[key];
@@ -1272,6 +1305,19 @@ async function init() {
   if (!Array.isArray(tiles)) tiles = [];
   const loaded = await window.api.loadSettings();
   settings = { ...DEFAULT_SETTINGS, ...(loaded || {}) };
+  tiles.forEach((t) => { if (t && t.type === "media") t.icon = { kind: "default", value: "" }; }); // メディアのアイコンは既定のみ
+  // メディアキー（再生/一時停止・次の曲など）は、Launch-Kのサウンドボタンの再生には作用させない
+  try {
+    if (navigator.mediaSession) {
+      ["play", "pause", "stop", "previoustrack", "nexttrack", "seekbackward", "seekforward", "seekto"].forEach((a) => { try { navigator.mediaSession.setActionHandler(a, () => {}); } catch (e) { /* 無視 */ } });
+    }
+  } catch (e) { /* 無視 */ }
+  try { timerOpen = !!(await window.api.timerIsOpen()); } catch (e) { timerOpen = false; }
+  window.api.onTimerState((open) => {
+    timerOpen = !!open;
+    try { renderGrid(); } catch (e) { /* 無視 */ }
+    try { if (IS_LAUNCH0 && typeof l0PushState === "function") l0PushState(); } catch (e) { /* 無視 */ } // スマホのタイマーのボタンも、暗くする／戻す
+  });
   const obsCleanup = removeObsLeftovers();
   const soundSubsRemoved = removeSoundFromMulti();
   ensurePageThemes();
@@ -1280,6 +1326,10 @@ async function init() {
   updateLockButton();
   renderGrid();
   syncHotkeys(WINDOW_PAGE_INDEX === 0);
+  if (WINDOW_PAGE_INDEX === 0) {
+    // 更新が終わって最初の起動のときだけ、「更新しました」と知らせる
+    window.api.takeUpdatedNotice().then((n) => { if (n && n.to) showToast(`更新が完了しました（v${n.from} → v${n.to}）`); }).catch(() => {});
+  }
   if (WINDOW_PAGE_INDEX === 0) window.api.onLaunch0Ended((reason) => { const m = l0EndMessage(reason); if (m) showToast(m); });
   // 取り除いたOBS関連のデータを保存する（メイン画面だけが行う。同時に複数の窓が保存して競合しないように）
   if (WINDOW_PAGE_INDEX === 0 && (obsCleanup.removedTiles || obsCleanup.removedSubs || obsCleanup.settingsChanged)) {
@@ -1287,7 +1337,9 @@ async function init() {
       if (obsCleanup.removedTiles || obsCleanup.removedSubs) await persistTiles();
       if (obsCleanup.settingsChanged) await persistSettings();
       const count = obsCleanup.removedTiles + obsCleanup.removedSubs;
-      if (count) showToast(`OBS連携は廃止しました。OBS用のボタン・動作${count}個を取り除きました`);
+      const obsCount = count - obsCleanup.removedDiscord;
+      if (obsCleanup.removedDiscord) showToast(`Discord（キー送信）は廃止しました。Discord用のボタン・動作${obsCleanup.removedDiscord}個を取り除きました`);
+      else if (obsCount > 0) showToast(`OBS連携は廃止しました。OBS用のボタン・動作${obsCount}個を取り除きました`);
     } catch (e) {
       console.warn("OBS cleanup save failed:", e && e.message);
     }
@@ -1317,6 +1369,7 @@ async function init() {
   });
   // 他のウィンドウ（メイン／ページ別画面）でタイルや設定が変更されたときに、
   // このウィンドウにも反映する。
+  window.api.onMicChanged(() => { scheduleMuteRefresh(0); refreshMicModalList(); });
   window.api.onTilesChanged(async () => {
     tiles = (await window.api.loadTiles()) || [];
     renderGrid();
@@ -1626,6 +1679,24 @@ function attachPagerDragFlip(btn, delta, totalPages) {
   btn.addEventListener("drop", (e) => { e.preventDefault(); clear(); });
 }
 
+// マイクのボタンの見た目：未接続・未選択はグレー、一部だけミュート／確認できないときは右上に注意マーク
+function applyMicTileLook(btn, tile) {
+  const st = micState(tile);
+  if (st === "none" || st === "unselected") {
+    btn.style.opacity = "0.45";
+    btn.setAttribute("aria-disabled", "true");
+    btn.dataset.micState = st;
+  } else if (st === "partial" || st === "unknown") {
+    const b = document.createElement("span");
+    b.textContent = "!";
+    b.setAttribute("aria-label", st === "partial" ? "一部のマイクが開いています" : "マイクの状態を確認できません");
+    b.style.cssText = "position:absolute;top:6px;right:6px;width:18px;height:18px;border-radius:50%;background:#FFB238;color:#14161B;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;pointer-events:none;";
+    btn.style.position = "relative";
+    btn.appendChild(b);
+    btn.dataset.micState = st;
+  }
+}
+
 function buildTileElement(tile) {
   const wrap = document.createElement("div");
   wrap.className = "tile-wrap";
@@ -1684,12 +1755,14 @@ function buildTileElement(tile) {
   });
 
   const btn = document.createElement("button");
-  btn.className = "tile";
+  btn.className = "tile" + (timerOpen && tileOpensTimer(tile) ? " timer-busy" : "");
   btn.innerHTML = `
     <div class="tile-icon-wrap">
       <div class="tile-icon${isCssIconTile(tile) ? " css-icon" : ""}" style="${iconBg(tile)}">${iconInner(tile)}</div>
     </div>
   `;
+
+  if (isMicTile(tile)) applyMicTileLook(btn, tile);
 
   const isHoldType = (tile.type === "volume" || tile.type === "brightness" || tile.type === "zoom") && (tile.action === "up" || tile.action === "down" || tile.action === "in" || tile.action === "out");
   if (isHoldType) {
@@ -1792,23 +1865,48 @@ function isCssIconTile(tile) {
   return true;
 }
 // forceOff：編集モーダルで「オフのとき」のプレビューを見せるためだけの引数（省略時は実際の状態を使う）。
+// オン用・オフ用のCSSアイコンを両方選んでいるボタンだけ、オフ（ミュート中）のときに別の色を使える。未設定なら、今までどおりの赤
+function offColorFor(tile) {
+  return tile && tile.icon?.kind === "css" && tileHasToggle(tile) && /^#[0-9a-fA-F]{6}$/.test(String(tile.offColor || "")) ? tile.offColor : null;
+}
 function iconBg(tile, forceOff) {
   if (tile.icon?.kind === "image" && tile.icon.value) return "";
   const muted = forceOff !== undefined ? forceOff : isTileMuted(tile);
-  if (muted) return "background:#FF6B5E33;";
+  if (muted) {
+    const oc = offColorFor(tile);
+    if (oc) return tile.icon.filled ? `background:${oc};` : `background:${oc}26;`;
+    return "background:#FF6B5E33;";
+  }
   // 「CSS」アイコンは、背景を薄い着色（既定）ではなく、テーマカラーで塗りつぶすことができる。
   if (tile.icon?.kind === "css" && tile.icon.filled) return `background:${safeColor(tile.color)};`;
   return `background:${safeColor(tile.color)}26;`;
 }
 function iconInner(tile, forceOff) {
-  if (tile.icon?.kind === "image" && tile.icon.value) return `<img src="${escapeHtml(toFileUrl(tile.icon.value))}" alt="" />`;
+  const isOff = forceOff !== undefined ? forceOff : isIconOff(tile);
+  const muteType = tileHasToggle(tile); // マイク・スピーカーのミュート系
+  // サウンドは、オフ（止まっている）のとき、画像・絵文字を少し暗くする。ミュート系は、暗くせず、斜線（または、選んだオフ用の画像）で見分ける
+  const dim = tile.type === "sound" && isOff ? "filter:brightness(0.6);" : "";
+  if (tile.icon?.kind === "image" && tile.icon.value) {
+    if (muteType && isOff) {
+      if (tile.icon.offValue) return `<img src="${escapeHtml(toFileUrl(tile.icon.offValue))}" alt="" />`;
+      return `<span class="icon-slash"><img src="${escapeHtml(toFileUrl(tile.icon.value))}" alt="" /></span>`;
+    }
+    return `<img src="${escapeHtml(toFileUrl(tile.icon.value))}" alt="" style="${dim}" />`;
+  }
   if (tile.icon?.kind === "emoji" && tile.icon.value) {
     // 絵文字1文字ならこれまでと同じ大きさで表示。
     // 文字数が多い（例：日本語の略称テキスト）場合は、アイコン枠から
     // はみ出さないよう文字数に応じて縮小し、2行に折り返して中央に収める。
-    const chars = Array.from(tile.icon.value);
-    const scale = chars.length <= 1 ? 0.64 : chars.length === 2 ? 0.46 : 0.4;
-    return `<span class="tile-icon-emoji" style="font-size:calc(var(--icon-size) * ${scale})">${escapeHtml(tile.icon.value)}</span>`;
+    const emojiHtml = (txt) => {
+      const chars = Array.from(txt);
+      const scale = chars.length <= 1 ? 0.64 : chars.length === 2 ? 0.46 : 0.4;
+      return `<span class="tile-icon-emoji" style="font-size:calc(var(--icon-size) * ${scale});${dim}">${escapeHtml(txt)}</span>`;
+    };
+    if (muteType && isOff) {
+      if (tile.icon.offValue) return emojiHtml(String(tile.icon.offValue));
+      return `<span class="icon-slash">${emojiHtml(tile.icon.value)}</span>`;
+    }
+    return emojiHtml(tile.icon.value);
   }
   // css（自作アイコン・個別選択固定）または default（自動追従）はここで描画する。
   const off = forceOff !== undefined ? forceOff : isIconOff(tile);
@@ -1817,7 +1915,9 @@ function iconInner(tile, forceOff) {
   // ユーザーがオン用・オフ用として選んだ2つのアイコンをそのまま出し分ける。
   if (tile.icon?.kind === "css" && tileHasToggle(tile) && tile.icon.offValue) {
     const key = off ? tile.icon.offValue : tile.icon.value;
-    svg = (CSS_ICONS[key] || CSS_ICONS.circleMark).svg;
+    const def = CSS_ICONS[key] || CSS_ICONS.circleMark;
+    // オフ用に、オン/オフ対応のアイコン（マイク・スピーカー・ヘッドホン・イヤホン）を選んでいるときは、斜線入りの図柄で表示する
+    svg = off && def.toggle && def.offSvg ? def.offSvg : def.svg;
   } else {
     const iconKey = resolveCssIconKey(tile);
     const def = CSS_ICONS[iconKey] || CSS_ICONS.circleMark;
@@ -1827,10 +1927,13 @@ function iconInner(tile, forceOff) {
   // ミュート系の赤い状態表示は、塗りつぶし設定より優先してそのまま見せる。
   // （サウンドの「オフ」は、本体の色はそのままで、斜線だけが赤い）
   const redBody = off && tileHasToggle(tile);
-  const mutedOverride = redBody;
+  const offColor = redBody ? offColorFor(tile) : null; // オフ用に色を選んでいるとき
+  const mutedOverride = redBody && !offColor;
   const filled = tile.icon?.kind === "css" && tile.icon.filled && !mutedOverride;
   let color;
-  if (redBody) {
+  if (offColor) {
+    color = filled ? (luminance(safeColor(offColor)) < 0.5 ? "#FFFFFF" : "#14161B") : offColor;
+  } else if (redBody) {
     color = "#FF6B5E";
   } else if (filled) {
     // 塗りつぶし背景の上でもアイコンがくっきり見えるよう、背景色の明るさに応じて白/黒を選ぶ。
@@ -1938,6 +2041,21 @@ async function runSoundTile(tile) {
     showToast("再生できませんでした" + (err && err.name ? "（" + err.name + "）" : ""));
   }
 }
+function confirmImportedLaunch(tile) {
+  return new Promise((resolve) => {
+    const targets = [tile, ...(Array.isArray(tile.subActions) ? tile.subActions : [])]
+      .filter((x) => x && (x.type === "app" || x.type === "file" || x.type === "folder"))
+      .map((x) => x.filePath || "(未設定)");
+    modalBodyEl.innerHTML = `
+      <p style="font-size:14px;color:var(--text);margin-bottom:10px;">このボタンは、バックアップから読み込んだものです。次を開きます。よろしいですか？</p>
+      <div class="path-preview" style="margin:0 0 14px;word-break:break-all;line-height:1.7;">${targets.map((x) => escapeHtml(x)).join("<br>")}</div>
+      <div class="modal-actions"><button class="btn default" id="cancelRunImported">やめる</button><button class="btn primary" id="okRunImported">開く（次からは確認しません）</button></div>
+    `;
+    document.getElementById("cancelRunImported").addEventListener("click", () => { closeModal(); resolve(false); });
+    document.getElementById("okRunImported").addEventListener("click", () => { closeModal(); resolve(true); });
+    overlayEl.classList.add("show");
+  });
+}
 async function handleTileClick(tile, fromMulti) {
   // マルチ操作の実行中は、それ自身の内部処理（サブ動作の順次実行）以外からの
   // ボタン操作をすべて受け付けない。これを許すと、例えば「LINEを開いて応答待ち」の
@@ -1946,6 +2064,13 @@ async function handleTileClick(tile, fromMulti) {
   // どちらか（または両方）の画面分割が誤ったウィンドウに効いてしまう恐れがあるため。
   if (!fromMulti && multiRunningIds.size > 0) {
     return showToast("マルチ操作の実行中は他のボタンを使用できません（完了までお待ちください）");
+  }
+  // バックアップ由来で、アプリ・ファイル・フォルダを開くボタンは、初めて押すときだけ確認する
+  if (tile.needsConfirm && !fromMulti) {
+    const ok = await confirmImportedLaunch(tile);
+    if (!ok) return;
+    delete tile.needsConfirm;
+    try { await persistTiles(); } catch (e) { /* 無視 */ }
   }
   if (tile.type === "link") {
     if (!tile.url) return showToast("URLが設定されていません");
@@ -2000,12 +2125,12 @@ async function handleTileClick(tile, fromMulti) {
     openConfirmPower(tile.action);
     return;
   }
-  if (tile.type === "mic") {
-    const result = await window.api.setMicAction();
-    if (result && result.error) { showToast(result.error); return; }
-    // 切り替え後の実際の状態が返ってくるので、そのまま表示に反映する（保存はしない）
-    audioMuteState.mic = !!(result && result.muted);
-    renderGrid();
+  if (tile.type === "mic" || tile.type === "micdev") {
+    if (tile.type === "micdev" && !tile.micDeviceId) { showToast("マイクが選ばれていません。ボタンを編集して選んでください"); l0NoteFailure(); return; }
+    const result = tile.type === "micdev" ? await window.api.micToggleDevice(tile.micDeviceId) : await window.api.setMicAction(tile.micExcludeIds);
+    if (result && result.error) { showToast(result.error); l0NoteFailure(); await refreshMicNow(); return; }
+    // 切り替え後の実際の状態（読み直した結果）を取り直して、そのまま表示に反映する（保存はしない）
+    await refreshMicNow();
     return;
   }
   if (tile.type === "clipboard") {
@@ -2030,7 +2155,8 @@ async function handleTileClick(tile, fromMulti) {
     return;
   }
   if (tile.type === "timer") {
-    await window.api.openTimer();
+    if (timerOpen) showToast("すでにタイマー画面は開いています");
+    await window.api.openTimer(); // 開いているときは、その画面を前に出すだけ（2つ目は開かない）
     return;
   }
   if (tile.type === "window") {
@@ -2057,12 +2183,6 @@ async function handleTileClick(tile, fromMulti) {
   if (tile.type === "zoom") {
     if (!tile.action) return showToast("動作が設定されていません");
     const err = await window.api.setZoomAction(tile.action, tile.repeatCount || 1);
-    if (err) showToast(err);
-    return;
-  }
-  if (tile.type === "discord") {
-    if (!tile.sendHotkey) return showToast("送信するキーが設定されていません");
-    const err = await window.api.sendHotkey(tile.sendHotkey);
     if (err) showToast(err);
     return;
   }
@@ -2134,7 +2254,7 @@ async function runMultiAction(tile) {
   if (multiRunningIds.size > 0) {
     return showToast("ほかのマルチ操作の実行中です。終わってからお試しください");
   }
-  const list = (Array.isArray(tile.subActions) ? tile.subActions : []).filter((s) => s && s.type && s.type !== "multi" && s.type !== "qr" && s.type !== "sound");
+  const list = (Array.isArray(tile.subActions) ? tile.subActions : []).filter((s) => s && s.type && s.type !== "multi" && s.type !== "qr" && s.type !== "sound" && s.type !== "micdev");
   if (list.length < 2) return showToast("マルチ操作には動作を2つ以上設定してください");
   multiRunningIds.add(tile.id);
   // 実行を始めた時点でLaunch-K自身が前面にいるか（ボタンのクリックで実行したか）。
@@ -2239,13 +2359,15 @@ function openAddModal() {
       icon: { kind: "default", value: "" }, color: COLORS[tiles.length % COLORS.length], subActions: [],
     },
   };
+  modalBodyEl.scrollTop = 0;
   renderModal();
-  overlayEl.classList.add("show");
+  overlayEl.classList.add("show", "edit-top");
 }
 function openEditModal(tile) {
   modalData = { mode: "edit", tile: { ...tile, icon: { ...tile.icon } } };
+  modalBodyEl.scrollTop = 0;
   renderModal();
-  overlayEl.classList.add("show");
+  overlayEl.classList.add("show", "edit-top");
 }
 function stopRecordingHotkey() {
   if (activeHotkeyKeydownHandler) {
@@ -2258,7 +2380,7 @@ function stopRecordingHotkey() {
 function closeModal() {
   stopRecordingHotkey();
   modalData = null;
-  overlayEl.classList.remove("show");
+  overlayEl.classList.remove("show", "edit-top");
 }
 
 let multiSubDragIndex = null; // マルチ操作編集中、ドラッグで並び替え中の元インデックス
@@ -2436,7 +2558,7 @@ function renderSubFields(fieldsEl, sub, t) {
     actionButtons(POWER_ACTIONS);
     fieldsEl.insertAdjacentHTML("beforeend", `<div class="path-preview" style="margin:6px 0 0;">実行前に確認画面が出ます。</div>`);
   } else if (sub.type === "mic") {
-    fieldsEl.innerHTML = `<div class="path-preview" style="margin:0;">マイクのミュート・ミュート解除を切り替えます。</div>`;
+    fieldsEl.innerHTML = `<div class="path-preview" style="margin:0;">接続中のすべてのマイクを、まとめてミュート・解除します（仮想デバイス・ミキサーは除く）。</div>`;
   } else if (sub.type === "window") {
     actionButtons(WINDOW_ACTIONS);
   } else if (sub.type === "pageswitch") {
@@ -2538,46 +2660,6 @@ function renderSubFields(fieldsEl, sub, t) {
     }
     fieldsEl.insertAdjacentHTML("beforeend", `<label class="checkbox-row" style="margin:2px 0 0;"><input type="checkbox" class="sub-autopaste" ${sub.autoPaste ? "checked" : ""} />直前の入力欄に貼り付ける（Ctrl+V相当）</label>`);
     fieldsEl.querySelector(".sub-autopaste").addEventListener("change", (e) => { sub.autoPaste = e.target.checked; });
-  } else if (sub.type === "discord") {
-    fieldsEl.innerHTML = `
-      <div style="display:flex;gap:8px;align-items:center;">
-        <div class="path-preview" style="margin:0;flex:1;">${sub.sendHotkey ? escapeHtml(formatHotkeyDisplay(sub.sendHotkey)) : "未設定"}</div>
-        <button class="btn default" id="sf-recordDiscord" type="button">設定</button>
-        ${sub.sendHotkey ? '<button class="btn default" id="sf-clearDiscord" type="button">解除</button>' : ""}
-      </div>
-    `;
-    fieldsEl.querySelector("#sf-recordDiscord").addEventListener("click", (e) => {
-      stopRecordingHotkey();
-      e.target.textContent = "キーを押してください…（Escで取消）";
-      recordingHotkey = true;
-      const onKey = (ev) => {
-        ev.preventDefault();
-        if (["Control", "Alt", "Shift", "Meta"].includes(ev.key)) return;
-        stopRecordingHotkey();
-        if (ev.key === "Escape" && !ev.ctrlKey && !ev.altKey && !ev.shiftKey) { renderMultiSubList(t); return; }
-        const hotkeyChar = hotkeyCharFromEvent(ev);
-        const isSingleAlnum = !!hotkeyChar;
-        if (!(ev.ctrlKey && ev.altKey && ev.shiftKey) || !isSingleAlnum) {
-          showToast("「Ctrl+Alt+Shift＋数字1文字 または 英字1文字」のみ設定できます。");
-          renderMultiSubList(t);
-          return;
-        }
-        const subCombo = `Control+Alt+Shift+${hotkeyChar}`;
-        const subIndex = Array.isArray(t.subActions) ? t.subActions.indexOf(sub) : -1;
-        const subClash = findHotkeyClash(subCombo, "send", t, `sub:${subIndex}`);
-        if (subClash) {
-          showToast(subClash.text);
-          renderMultiSubList(t);
-          return;
-        }
-        sub.sendHotkey = subCombo;
-        renderMultiSubList(t);
-      };
-      activeHotkeyKeydownHandler = onKey;
-      document.addEventListener("keydown", onKey, true);
-    });
-    const clearBtn = fieldsEl.querySelector("#sf-clearDiscord");
-    if (clearBtn) clearBtn.addEventListener("click", () => { sub.sendHotkey = ""; renderMultiSubList(t); });
   } else if (sub.type === "shortcutKeys") {
     actionButtons(SHORTCUT_ACTIONS);
     fieldsEl.insertAdjacentHTML("beforeend", `<div class="path-preview" style="margin:6px 0 0;">基本的なショートカットをワンボタンで操作できます。</div>`);
@@ -2586,7 +2668,162 @@ function renderSubFields(fieldsEl, sub, t) {
   }
 }
 
+// ---------- マイクボタンの設定欄 ----------
+// 接続中の録音デバイスの一覧を、メインプロセスから受け取る。
+// 手元の最新ですぐ表示し、設定画面を開いた直後に1回だけ、裏で最新に読み直す（一覧が変わっていたときだけ、表示を更新する）。
+async function loadMicDevices(modal, onFresh) {
+  let snap = null;
+  try { snap = await window.api.micSnapshot(); } catch (e) { snap = null; }
+  const usable = !!(snap && snap.ok && Array.isArray(snap.devices) && snap.devices.length);
+  if (modal && !modal.micLoaded) {
+    modal.micLoaded = true;
+    if (usable) {
+      Promise.resolve(window.api.micRefresh()).then((f) => { if (f && Array.isArray(f.devices) && onFresh) onFresh(f); }).catch(() => {});
+    } else {
+      try { const f = await window.api.micRefresh(); if (f) snap = f; } catch (e) { /* 手元の最新で続ける */ }
+    }
+  }
+  return snap && Array.isArray(snap.devices) ? snap : { ok: false, devices: [] };
+}
+function micSnapSig(s) { return s && Array.isArray(s.devices) ? s.devices.map((d) => d.id + ":" + d.state + ":" + d.label).join("|") : ""; }
+// 裏で読み直した一覧が、いま表示しているものと違うときだけ、描き直す
+function micFreshUpdate(modal, fresh, redraw) {
+  if (modalData !== modal || micSnapSig(fresh) === micSnapSig(modal.micSnapCache)) return;
+  modal.micSnapCache = fresh;
+  redraw();
+}
+// マイクの接続が変わったとき（挿した・抜いた）、開いている設定画面のマイク一覧も更新する（ミュートの切り替えだけのときは、描き直さない）
+async function refreshMicModalList() {
+  const modal = modalData;
+  const host = document.getElementById("micHost");
+  if (!modal || !host || !host.isConnected || !modal.micSnapCache) return;
+  let snap = null;
+  try { snap = await window.api.micSnapshot(); } catch (e) { return; }
+  if (!snap || !snap.ok || !Array.isArray(snap.devices)) return;
+  micFreshUpdate(modal, snap, () => {
+    const h = document.getElementById("micHost");
+    if (h && h.isConnected) (modal.tile.type === "mic" ? renderMicAllSettings : renderMicDevSettings)(modal.tile, h);
+  });
+}
+// デバイス名の表示：画面に出す名前（内蔵マイクは「内蔵マイク」）と、違うときだけ元の名前を小さく添える
+function micNameHtml(d) {
+  const orig = d.name && d.name !== d.label ? `<div style="font-size:11px;color:var(--text-muted);font-weight:400;">${escapeHtml(d.name)}</div>` : "";
+  return `<span style="flex:1;min-width:0;overflow-wrap:anywhere;"><div>${escapeHtml(d.label || d.name)}</div>${orig}</span>`;
+}
+// 「1台ずつ」：接続中のマイクから1台だけ選ぶ（他のボタンが使用中のマイクは選べない）
+function renderMicDevSettings(t, host) {
+  const C = window.MicCore;
+  const modal = modalData;
+  const build = (snap) => {
+    const usedBy = C.usedByOthers(tiles, t.id);
+    const showAll = !!modal.micShowAll;
+    const all = snap.devices || [];
+    const active = all.filter((d) => C.isActive(d));
+    const shown = active.filter((d) => showAll || d.micLike || d.id === t.micDeviceId);
+    const cur = t.micDeviceId ? all.find((d) => d.id === t.micDeviceId) : null;
+    const curConnected = !!(cur && C.isActive(cur));
+    let html = "";
+    if (!snap.ok && !active.length) html += `<div class="path-preview" style="margin-top:0;color:#FFB238;">マイクの一覧を読み込めませんでした。少し待って、もう一度この画面を開いてください。</div>`;
+    // 登録済みのマイクが接続されていないとき：選択したまま残す（グレー表示）
+    if (t.micDeviceId && !curConnected) {
+      const why = cur && cur.state === C.STATE.DISABLED ? "Windowsで無効になっています" : "いまは接続されていません";
+      html += `<div style="display:flex;gap:8px;align-items:center;padding:6px 4px;opacity:.6;"><input type="radio" checked disabled><span style="flex:1;min-width:0;overflow-wrap:anywhere;">選択中：${escapeHtml(C.displayName({ name: t.micDeviceName }))}（${why}）</span></div>`;
+      const cand = C.rematchByName(all, t.micDeviceName, Array.from(usedBy.keys()));
+      if (cand) html += `<div class="path-preview" style="margin:0 0 6px;">同じ名前のマイクが見つかりました：<b>${escapeHtml(cand.label || cand.name)}</b>（${escapeHtml(cand.kind)}）　<button class="btn default" id="micRematchBtn" type="button">このマイクに切り替える</button></div>`;
+    }
+    shown.forEach((d, i) => {
+      const owner = usedBy.get(d.id);
+      const disabled = owner !== undefined;
+      const checked = d.id === t.micDeviceId;
+      const warn = d.virtual ? `<div class="path-preview" style="margin:0 0 4px 28px;color:#FFB238;">仮想デバイス・ミキサーです。ミュートすると、PCの音がOBSなどに届かなくなる場合があります。</div>` : "";
+      html += `<label style="display:flex;gap:8px;align-items:center;padding:6px 4px;${disabled ? "opacity:.5;" : "cursor:pointer;"}"><input type="radio" name="micdevPick" data-i="${i}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}>${micNameHtml(d)}<span class="path-preview" style="margin:0;padding:2px 8px;white-space:nowrap;">${escapeHtml(d.kind)}</span></label>`;
+      if (disabled) html += `<div class="path-preview" style="margin:0 0 4px 28px;">「${escapeHtml(owner || "別のボタン")}」ボタンで使用中</div>`;
+      else if (checked) html += warn;
+    });
+    if (!shown.length) html += `<div class="path-preview">接続中のマイクが見つかりません。${showAll ? "" : "「録音デバイスをすべて表示」を入れると、マイク以外の入力も表示します。"}</div>`;
+    html += `<label style="display:flex;gap:8px;align-items:center;margin:8px 0;cursor:pointer;"><input type="checkbox" id="micShowAll" ${showAll ? "checked" : ""}><span>録音デバイスをすべて表示（ステレオミキサーなども出ます）</span></label>`;
+    html += `<div class="field-label">元の名前</div><div style="display:flex;gap:8px;align-items:center;"><div class="path-preview" style="margin:0;flex:1;overflow-wrap:anywhere;">${t.micDeviceName ? escapeHtml(t.micDeviceName) : "（未選択）"}</div><button class="btn default" id="micOrigNameBtn" type="button" ${t.micDeviceName ? "" : "disabled"}>元の名前に戻す</button></div>`;
+    html += `<label style="display:flex;gap:8px;align-items:center;margin:10px 0 4px;cursor:pointer;"><input type="checkbox" id="micAutoMute" ${t.autoMute === true ? "checked" : ""}><span>このマイクをつないだ瞬間に、自動でミュートする</span></label>`;
+    host.innerHTML = html;
+    host.querySelectorAll('input[name="micdevPick"]').forEach((el) => {
+      el.addEventListener("change", () => {
+        const d = shown[Number(el.dataset.i)];
+        if (!d) return;
+        const prevAuto = String(C.displayName({ name: t.micDeviceName })).slice(0, 20);
+        t.micDeviceId = d.id;
+        t.micDeviceName = d.name;
+        // 名前が空、または前のマイクの標準の名前のままなら、新しいマイクの名前にそろえる（自分で付けた名前は変えない）
+        if (!t.name.trim() || t.name === prevAuto) { t.name = String(d.label || d.name).slice(0, 20); const ni = document.getElementById("nameInput"); if (ni) ni.value = t.name; }
+        renderMicDevSettings(t, host);
+      });
+    });
+    const sa = host.querySelector("#micShowAll");
+    if (sa) sa.addEventListener("change", () => { modal.micShowAll = sa.checked; renderMicDevSettings(t, host); });
+    const am = host.querySelector("#micAutoMute");
+    if (am) am.addEventListener("change", () => { t.autoMute = am.checked; });
+    const ob = host.querySelector("#micOrigNameBtn");
+    if (ob) ob.addEventListener("click", () => { t.name = String(C.displayName({ name: t.micDeviceName })).slice(0, 20); const ni = document.getElementById("nameInput"); if (ni) ni.value = t.name; });
+    const rb = host.querySelector("#micRematchBtn");
+    if (rb) rb.addEventListener("click", () => {
+      const cand = C.rematchByName(all, t.micDeviceName, Array.from(usedBy.keys()));
+      if (!cand) return;
+      t.micDeviceId = cand.id; t.micDeviceName = cand.name;
+      renderMicDevSettings(t, host);
+    });
+  };
+  // 2回目以降（選ぶたび・色を変えたときなど）は、「読み込んでいます…」を挟まず、手元の一覧からその場で描き直す（画面がちらつかない）
+  if (modal.micSnapCache) { build(modal.micSnapCache); return; }
+  host.innerHTML = `<div class="path-preview" style="margin-top:0;">マイクを読み込んでいます…</div>`;
+  loadMicDevices(modal, (fresh) => micFreshUpdate(modal, fresh, () => { const h = document.getElementById("micHost"); if (h && h.isConnected) renderMicDevSettings(modal.tile, h); })).then((snap) => {
+    if (modalData !== modal || !host.isConnected) return;
+    if (!modal.micSnapCache) modal.micSnapCache = snap;
+    build(modal.micSnapCache);
+  });
+}
+// 「すべてまとめて」：まとめてミュートから外すマイクを選ぶ（仮想・ミキサー・デジタル入力は自動で対象外）
+function renderMicAllSettings(t, host) {
+  const C = window.MicCore;
+  const modal = modalData;
+  if (!Array.isArray(t.micExcludeIds)) t.micExcludeIds = [];
+  const build = (snap) => {
+    const active = (snap.devices || []).filter((d) => C.isActive(d));
+    const targets = C.allMicTargets(active, []);
+    const autoEx = active.filter((d) => !targets.includes(d));
+    let html = `<div class="path-preview" style="margin-top:0;">接続中のすべてのマイクを、まとめてミュート・解除します。1台でも開いているマイクがあればミュートし、すべてミュート済みのときだけ解除します。新しく挿したマイクも自動で対象になります。仮想デバイス・ミキサー・デジタル入力は、PCの音を止めてしまわないよう、自動で対象外です。</div>`;
+    html += `<div class="field-label">まとめてミュートから外すマイク（チェックしたものは対象外）</div>`;
+    if (!snap.ok && !active.length) html += `<div class="path-preview" style="color:#FFB238;">マイクの一覧を読み込めませんでした。少し待って、もう一度この画面を開いてください。</div>`;
+    targets.forEach((d, i) => {
+      html += `<label style="display:flex;gap:8px;align-items:center;padding:6px 4px;cursor:pointer;"><input type="checkbox" data-i="${i}" ${t.micExcludeIds.includes(d.id) ? "checked" : ""}>${micNameHtml(d)}<span class="path-preview" style="margin:0;padding:2px 8px;white-space:nowrap;">${escapeHtml(d.kind)}</span></label>`;
+    });
+    if (!targets.length) html += `<div class="path-preview">接続中のマイクが見つかりません。</div>`;
+    if (autoEx.length) html += `<div class="path-preview">自動で対象外：${autoEx.map((d) => escapeHtml(d.label || d.name)).join("、")}</div>`;
+    host.innerHTML = html;
+    host.querySelectorAll('input[type="checkbox"]').forEach((el) => {
+      el.addEventListener("change", () => {
+        const d = targets[Number(el.dataset.i)];
+        if (!d) return;
+        const set = new Set(t.micExcludeIds);
+        if (el.checked) set.add(d.id); else set.delete(d.id);
+        t.micExcludeIds = Array.from(set);
+      });
+    });
+  };
+  if (modal.micSnapCache) { build(modal.micSnapCache); return; }
+  host.innerHTML = `<div class="path-preview" style="margin-top:0;">マイクを読み込んでいます…</div>`;
+  loadMicDevices(modal, (fresh) => micFreshUpdate(modal, fresh, () => { const h = document.getElementById("micHost"); if (h && h.isConnected) renderMicAllSettings(modal.tile, h); })).then((snap) => {
+    if (modalData !== modal || !host.isConnected) return;
+    if (!modal.micSnapCache) modal.micSnapCache = snap;
+    build(modal.micSnapCache);
+  });
+}
+
+// 設定画面の再描画。中身を全部作り直しても、スクロール位置が先頭に戻ったり、ずれたりしないようにする
 function renderModal() {
+  const top = modalBodyEl.scrollTop;
+  renderModalCore();
+  modalBodyEl.scrollTop = top;
+}
+function renderModalCore() {
   const t = modalData.tile;
   normalizeIcon(t);
   // 「ショートカット」ボタンはボタンを押して使うだけなので、起動用のショートカットキーは持たない
@@ -2602,7 +2839,7 @@ function renderModal() {
     <div class="field-label">アイコン</div>
     <div class="icon-row" id="iconRow"></div>
     <div id="iconSpecific"></div>
-    <div class="field-label">カラー</div>
+    <div class="field-label">${t.icon?.kind === "css" && tileHasToggle(t) ? (modalData.iconEditTarget === "off" ? "カラー（オフのとき）" : "カラー（オンのとき）") : "カラー"}</div>
     <div class="color-row" id="colorRow"></div>
     ${settings.pageCount > 1 ? `
     <div class="field-label" style="margin-top:14px;">表示する画面</div>
@@ -2640,6 +2877,8 @@ function renderModal() {
       if (key === "zoom" && !ZOOM_ACTIONS[t.action]) t.action = "in";
       if (key === "clipboard" && !CLIPBOARD_ACTIONS[t.action]) t.action = "text";
       if (key === "shortcutKeys" && !SHORTCUT_ACTIONS[t.action]) t.action = "copy";
+      if (key === "micdev") { if (typeof t.micDeviceId !== "string") t.micDeviceId = ""; if (typeof t.micDeviceName !== "string") t.micDeviceName = ""; t.autoMute = t.autoMute === true; }
+      if (key === "mic" && !Array.isArray(t.micExcludeIds)) t.micExcludeIds = [];
       if (key === "multi" && (!Array.isArray(t.subActions) || t.subActions.length < 2)) {
         t.subActions = [{ type: "link", url: "" }, { type: "link", url: "" }];
       }
@@ -2682,7 +2921,7 @@ function renderModal() {
     }
   } else if (t.type === "sound") {
     typeSpecific.innerHTML = `
-      <div class="path-preview" style="margin-top:0;">クリックすると、選んだ音声ファイルを再生します。鳴っている間にもう一度押すと一時停止、もう一度押すと続きから再生します。最後まで鳴ると自動で止まります。同じボタンの音は重なりません（別のボタンの音は同時に鳴ります）。対応する形式：${SOUND_EXTS.join("・")}</div>
+      <div class="path-preview" style="margin-top:0;">対応する形式：${SOUND_EXTS.join("・")}</div>
       <div class="file-pick-btn" id="pickSoundBtn">🎵 音声ファイルを選択</div>
       <div class="path-preview">${t.filePath ? escapeHtml(t.filePath) : "未選択"}</div>
       <div class="field-label">個別音量（<span id="volLabel">${numAttr(t.volume ?? 100, 100)}</span>）</div>
@@ -2747,7 +2986,7 @@ function renderModal() {
       if (picked) { t.filePath = picked; renderModal(); }
     });
   } else if (t.type === "media") {
-    typeSpecific.innerHTML = `<div class="field-label">動作</div><div class="type-row" id="mediaActionRow"></div><div class="path-preview">今使っている音楽・動画アプリに操作を送ります。</div>`;
+    typeSpecific.innerHTML = `<div class="field-label">動作</div><div class="type-row" id="mediaActionRow"></div><div class="path-preview">今使っている音楽・動画アプリに操作を送ります。アイコンは、既定のものだけ使えます。Launch-Kのサウンドボタンの再生には作用しません。</div>`;
     const row = document.getElementById("mediaActionRow");
     Object.entries(MEDIA_ACTIONS).forEach(([key, meta]) => {
       const b = document.createElement("div");
@@ -2789,7 +3028,11 @@ function renderModal() {
       row.appendChild(b);
     });
   } else if (t.type === "mic") {
-    typeSpecific.innerHTML = `<div class="path-preview" style="margin-top:0;">クリックするたびに、パソコンの既定のマイク（録音デバイス）のミュート・ミュート解除を切り替えます。</div>`;
+    typeSpecific.innerHTML = `<div id="micHost"></div>`;
+    renderMicAllSettings(t, document.getElementById("micHost"));
+  } else if (t.type === "micdev") {
+    typeSpecific.innerHTML = `<div id="micHost"></div>`;
+    renderMicDevSettings(t, document.getElementById("micHost"));
   } else if (t.type === "zoom") {
     if ((t.repeatCount || 1) > 5) t.repeatCount = 5;
     typeSpecific.innerHTML = `
@@ -2859,7 +3102,7 @@ function renderModal() {
     document.getElementById("autoPasteInput").addEventListener("change", (e) => { t.autoPaste = e.target.checked; });
   } else if (t.type === "timer") {
     typeSpecific.innerHTML = `
-      <div class="path-preview" style="margin-top:0;">押すと専用のタイマー画面が開きます。時間の編集やマルチタイマー（最大15個）の管理は、タイマー画面右上のメニュー（☰）から行えます。タイマー画面はロック（常に最前面）が既定でオン、鳴ったら音でお知らせします。</div>
+      <div class="path-preview" style="margin-top:0;">押すと専用のタイマー画面が開きます。時間の編集やマルチタイマー（最大15個）の管理は、タイマー画面右上のメニュー（☰）から行えます。</div>
     `;
   } else if (t.type === "window") {
     typeSpecific.innerHTML = `<div class="field-label">動作</div><div class="type-row" id="windowActionRow"></div><div class="path-preview">今アクティブなウィンドウを画面の半分または1/4にスナップします。</div>`;
@@ -2920,47 +3163,6 @@ function renderModal() {
       t.repeatCount = Number(e.target.value);
       document.getElementById("brightRepeatLabel").textContent = t.repeatCount;
     });
-  } else if (t.type === "discord") {
-    typeSpecific.innerHTML = `
-      <div class="path-preview" style="margin-top:0;">Discordを直接は操作できないため、Discord側の「設定 → キーボードショートカット」で設定した“ミュート切替”のキーと、下記で登録するキーを同じものにしてください。ボタンを押すと、そのキーの組み合わせをこのアプリから送信します（現在Windowsのみ対応）。</div>
-      <div class="field-label">送信するキー</div>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <div class="path-preview" id="discordHotkeyPreview" style="margin:0;flex:1;">${t.sendHotkey ? escapeHtml(formatHotkeyDisplay(t.sendHotkey)) : "未設定"}</div>
-        <button class="btn default" id="recordDiscordHotkeyBtn">設定</button>
-        ${t.sendHotkey ? '<button class="btn default" id="clearDiscordHotkeyBtn">解除</button>' : ""}
-      </div>
-    `;
-    document.getElementById("recordDiscordHotkeyBtn").addEventListener("click", (e) => {
-      stopRecordingHotkey();
-      e.target.textContent = "キーを押してください…（Escで取消）";
-      recordingHotkey = true;
-      const onKey = (ev) => {
-        ev.preventDefault();
-        if (["Control", "Alt", "Shift", "Meta"].includes(ev.key)) return;
-        stopRecordingHotkey();
-        if (ev.key === "Escape" && !ev.ctrlKey && !ev.altKey && !ev.shiftKey) { renderModal(); return; }
-        const hotkeyChar = hotkeyCharFromEvent(ev);
-        const isSingleAlnum = !!hotkeyChar;
-        if (!(ev.ctrlKey && ev.altKey && ev.shiftKey) || !isSingleAlnum) {
-          showToast("「Ctrl+Alt+Shift＋数字1文字 または 英字1文字」のみ設定できます。");
-          renderModal();
-          return;
-        }
-        const sendCombo = `Control+Alt+Shift+${hotkeyChar}`;
-        const sendClash = findHotkeyClash(sendCombo, "send", t, "send");
-        if (sendClash) {
-          showToast(sendClash.text);
-          renderModal();
-          return;
-        }
-        t.sendHotkey = sendCombo;
-        renderModal();
-      };
-      activeHotkeyKeydownHandler = onKey;
-      document.addEventListener("keydown", onKey, true);
-    });
-    const clearDiscordBtn = document.getElementById("clearDiscordHotkeyBtn");
-    if (clearDiscordBtn) clearDiscordBtn.addEventListener("click", () => { t.sendHotkey = ""; renderModal(); });
   } else if (t.type === "shortcutKeys") {
     typeSpecific.innerHTML = `
       <div class="field-label" style="margin-top:0;">ショートカット</div><div class="type-row" id="shortcutActionRow"></div>
@@ -3001,7 +3203,9 @@ function renderModal() {
     { kind: "emoji", label: "絵文字", title: "好きな絵文字を1つ入力します" },
     { kind: "image", label: "画像", title: "画像ファイルを選ぶか、画面をキャプチャして使います" },
   ];
-  ICON_KIND_OPTIONS.forEach((opt) => {
+  // メディアのボタンは、アイコンを既定のものにしか変えられない
+  if (t.type === "media" && t.icon.kind !== "default") t.icon = { kind: "default", value: "" };
+  ICON_KIND_OPTIONS.filter((o) => t.type !== "media" || o.kind === "default").forEach((opt) => {
     const b = document.createElement("div");
     b.className = "opt-btn" + (t.icon.kind === opt.kind ? " active" : "");
     b.textContent = opt.label;
@@ -3009,18 +3213,18 @@ function renderModal() {
     b.addEventListener("click", async () => {
       if (opt.kind === "image") {
         // 「ファイルから選ぶ」か「画面を撮る」かを下の欄で選べるよう、ここではタブを切り替えるだけにする
-        t.icon = { kind: "image", value: t.icon.kind === "image" ? t.icon.value : "" };
+        t.icon = { kind: "image", value: t.icon.kind === "image" ? t.icon.value : "", offValue: t.icon.kind === "image" ? t.icon.offValue : undefined };
         renderModal();
       } else if (opt.kind === "css") {
         // 「既定」から切り替えたときは、いま自動で表示されているアイコンから編集を始められるようにする
         // （塗りつぶしの設定・オフ用アイコンは、CSSタブ内での切り替えでは保持する）。
-        t.icon = { kind: "css", value: resolveCssIconKey(t), filled: t.icon.filled, offValue: t.icon.offValue };
+        t.icon = { kind: "css", value: resolveCssIconKey(t), filled: t.icon.filled, offValue: t.icon.kind === "css" ? t.icon.offValue : undefined };
         renderModal();
       } else if (opt.kind === "default") {
         t.icon = { kind: "default", value: "" };
         renderModal();
       } else {
-        t.icon = { kind: opt.kind, value: opt.kind === t.icon.kind ? t.icon.value : "" };
+        t.icon = { kind: opt.kind, value: opt.kind === t.icon.kind ? t.icon.value : "", offValue: opt.kind === t.icon.kind ? t.icon.offValue : undefined };
         renderModal();
       }
     });
@@ -3029,24 +3233,65 @@ function renderModal() {
 
   const iconSpecific = document.getElementById("iconSpecific");
   if (t.icon.kind === "emoji") {
-    iconSpecific.innerHTML = `<input type="text" class="icon-emoji-input" id="emojiInput" maxlength="4" placeholder="例：🚀" value="${escapeHtml(t.icon.value || "")}" />`;
+    const emojiOffRow = tileHasToggle(t)
+      ? `<div style="font-size:12px;color:var(--text-muted);margin:8px 0 4px;">オフ（ミュート中）の絵文字（空欄なら、オン用の絵文字に赤い斜線を重ねます）</div>
+         <input type="text" class="icon-emoji-input" id="emojiOffInput" maxlength="4" placeholder="空欄＝赤い斜線" value="${escapeHtml(t.icon.offValue || "")}" />`
+      : "";
+    iconSpecific.innerHTML = `<input type="text" class="icon-emoji-input" id="emojiInput" maxlength="4" placeholder="例：🚀" value="${escapeHtml(t.icon.value || "")}" />${emojiOffRow}`;
     document.getElementById("emojiInput").addEventListener("input", (e) => { t.icon.value = e.target.value.slice(0, 4); });
+    const emojiOffInput = document.getElementById("emojiOffInput");
+    if (emojiOffInput) emojiOffInput.addEventListener("input", (e) => { const v = e.target.value.slice(0, 4); if (v) t.icon.offValue = v; else delete t.icon.offValue; });
   } else if (t.icon.kind === "image") {
+    // オン/オフを持つタイル（マイク・スピーカー）は、「オン用」「オフ用」それぞれにファイル選択・画面キャプチャのボタンを出す。
+    // オフ用を選ばなかったときは、オン用の画像に赤い斜線を重ねて表示する。
+    const toggle = tileHasToggle(t);
+    const label = (txt) => (toggle ? `<div style="font-size:12px;font-weight:700;color:var(--text);margin:6px 0 4px;">${txt}</div>` : "");
+    const imgStyle = "width:36px;height:36px;border-radius:10px;object-fit:cover;";
+    const offPreview = t.icon.offValue
+      ? `<img src="${toFileUrl(t.icon.offValue)}" style="${imgStyle}" />`
+      : (t.icon.value ? `<span class="icon-slash" style="width:36px;height:36px;border-radius:10px;overflow:hidden;"><img src="${toFileUrl(t.icon.value)}" style="${imgStyle}" /></span>` : "");
     iconSpecific.innerHTML = `
-      ${t.icon.value ? `<div class="icon-preview-row"><img src="${toFileUrl(t.icon.value)}" style="width:36px;height:36px;border-radius:10px;object-fit:cover;" /><span style="font-size:12px;color:var(--text-muted);">プレビュー</span></div>` : ""}
+      ${label("オン用")}
+      ${t.icon.value ? `<div class="icon-preview-row"><img src="${toFileUrl(t.icon.value)}" style="${imgStyle}" /><span style="font-size:12px;color:var(--text-muted);">プレビュー</span></div>` : ""}
       <div style="display:flex;gap:8px;">
         <div class="file-pick-btn" id="iconPickFileBtn" style="flex:1;justify-content:center;margin-bottom:6px;">📁 ファイルから選ぶ</div>
         <div class="file-pick-btn" id="iconCaptureBtn" style="flex:1;justify-content:center;margin-bottom:6px;">📸 画面を撮る</div>
-      </div>`;
+      </div>
+      ${toggle ? `
+      ${label("オフ用（ミュート中）")}
+      <div class="icon-preview-row">
+        ${offPreview}
+        <span style="font-size:12px;color:var(--text-muted);line-height:1.6;">オフ（ミュート中）の表示：${t.icon.offValue ? "オフ用の画像" : "未選択<br>（未選択時にはオンの画像に赤い斜線を重ねます）"}</span>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <div class="file-pick-btn" id="iconOffPickBtn" style="flex:1;justify-content:center;margin-bottom:6px;">📁 ファイルから選ぶ</div>
+        <div class="file-pick-btn" id="iconOffCaptureBtn" style="flex:1;justify-content:center;margin-bottom:6px;">📸 画面を撮る</div>
+      </div>
+      ${t.icon.offValue ? '<div class="file-pick-btn" id="iconOffClearBtn" style="justify-content:center;margin-bottom:6px;">赤い斜線にもどす</div>' : ""}` : ""}`;
+    const offPickBtn = document.getElementById("iconOffPickBtn");
+    if (offPickBtn) offPickBtn.addEventListener("click", async () => {
+      const picked = await window.api.pickFile([{ name: "画像", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }]);
+      if (picked) { t.icon.offValue = picked; renderModal(); }
+    });
+    const offCaptureBtn = document.getElementById("iconOffCaptureBtn");
+    if (offCaptureBtn) offCaptureBtn.addEventListener("click", async () => {
+      const res = await window.api.captureScreen("icon");
+      if (!res) return; // 範囲選択をキャンセル
+      if (res.error) return showToast(res.error);
+      t.icon.offValue = res.dataUrl;
+      renderModal();
+    });
+    const offClearBtn = document.getElementById("iconOffClearBtn");
+    if (offClearBtn) offClearBtn.addEventListener("click", () => { delete t.icon.offValue; renderModal(); });
     document.getElementById("iconPickFileBtn").addEventListener("click", async () => {
       const picked = await window.api.pickFile([{ name: "画像", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }]);
-      if (picked) { t.icon = { kind: "image", value: picked }; renderModal(); }
+      if (picked) { t.icon = { kind: "image", value: picked, offValue: t.icon.offValue }; renderModal(); }
     });
     document.getElementById("iconCaptureBtn").addEventListener("click", async () => {
       const res = await window.api.captureScreen("icon");
       if (!res) return; // 範囲選択をキャンセル
       if (res.error) return showToast(res.error);
-      t.icon = { kind: "image", value: res.dataUrl };
+      t.icon = { kind: "image", value: res.dataUrl, offValue: t.icon.offValue };
       renderModal();
     });
   } else if (t.icon.kind === "default") {
@@ -3095,9 +3340,13 @@ function renderModal() {
       ` : ""}
     `;
 
+    // 一覧のアイコンは、いま選んでいる色で表示する（選択中かどうかは、枠線だけで示す）。「オフのとき」のタブでは、オフ用の色と、斜線入りの図柄で表示する
+    const swatchColor = editingOff ? (offColorFor(t) || "#FF6B5E") : safeColor(t.color);
     const swatchGrid = (keys) => `<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:10px;">${keys.map((k) => {
       const active = t.icon[activeValueKey] === k;
-      return `<div class="css-icon-swatch" data-key="${k}" title="${escapeHtml(CSS_ICONS[k].label)}" style="aspect-ratio:1/1;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:6px;cursor:pointer;background:var(--panel-alt);border:1px solid ${active ? "var(--accent)" : "var(--border)"};color:${active ? "var(--accent)" : "var(--text-muted)"};">${CSS_ICONS[k].svg}</div>`;
+      const def = CSS_ICONS[k];
+      const shown = editingOff && def.toggle && def.offSvg ? def.offSvg : def.svg;
+      return `<div class="css-icon-swatch" data-key="${k}" title="${escapeHtml(def.label)}" style="aspect-ratio:1/1;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:6px;cursor:pointer;background:var(--panel-alt);border:1px solid ${active ? "var(--accent)" : "var(--border)"};${active ? "box-shadow:0 0 0 1px var(--accent);" : ""}color:${swatchColor};">${shown}</div>`;
     }).join("")}</div>`;
     iconSpecific.innerHTML = previewRow + CSS_ICON_GROUPS.map((g) => {
       const isOpen = modalData.openIconGroups.has(g.title);
@@ -3132,7 +3381,11 @@ function renderModal() {
     });
     iconSpecific.querySelectorAll(".css-icon-swatch").forEach((el) => {
       el.addEventListener("click", () => {
-        t.icon = { ...t.icon, [activeValueKey]: el.dataset.key };
+        const next = { ...t.icon, [activeValueKey]: el.dataset.key };
+        // オン用に、オン/オフ対応のアイコンを選んだとき、オフ用が未選択なら、同じアイコン（オフのときは斜線入り）を自動で入れる
+        const picked = CSS_ICONS[el.dataset.key];
+        if (hasToggle && !editingOff && picked && picked.toggle && !t.icon.offValue) next.offValue = el.dataset.key;
+        t.icon = next;
         renderModal();
       });
     });
@@ -3141,9 +3394,11 @@ function renderModal() {
   }
 
   const colorRow = document.getElementById("colorRow");
-  buildColorRow(colorRow, t.color, (c, committed) => {
-    t.color = c;
-    modalData.colorTouched = true;
+  // オン用・オフ用のCSSアイコンを選んでいるときは、「オフのとき」のタブでは、オフ用の色を選ぶ（未設定のときは、今までどおり赤）
+  const editingOffColor = t.icon?.kind === "css" && tileHasToggle(t) && modalData.iconEditTarget === "off";
+  buildColorRow(colorRow, editingOffColor ? (offColorFor(t) || "#FF6B5E") : t.color, (c, committed) => {
+    if (editingOffColor) t.offColor = c;
+    else { t.color = c; modalData.colorTouched = true; }
     if (committed) {
       renderModal();
     } else {
@@ -3266,7 +3521,6 @@ async function saveModalImpl() {
           if (!s.filePath) return showToast(`${n}番目の動作：コピーする${s.action === "folder" ? "フォルダ" : s.action === "file" ? "ファイル" : "画像"}を選択してください`);
         } else if (!(s.text || "").trim()) return showToast(`${n}番目の動作：コピーする内容を入力してください`);
       }
-      if (s.type === "discord" && !s.sendHotkey) return showToast(`${n}番目の動作：送信するキーを設定してください`);
     }
     if (subs.some((s) => s.type === "link")) {
       subs.forEach((s) => { if (s.type === "link" && !/^https?:\/\//i.test(s.url)) s.url = "https://" + s.url.trim(); });
@@ -3278,11 +3532,23 @@ async function saveModalImpl() {
     });
   }
 
+  if (t.type === "micdev") {
+    if (!t.micDeviceId) return showToast("マイクを選んでください");
+    // 同じマイクは、1つのボタンにしか選べない（全画面を通して）
+    const clash = tiles.find((x) => x && x.id !== t.id && x.type === "micdev" && x.micDeviceId === t.micDeviceId);
+    if (clash) return showToast(`このマイクは「${clash.name}」ボタンで使われています`);
+  }
+
   // ショートカットキーの重複（別の窓で同時に設定された場合を含む）の最終チェック
   const hotkeyProblem = validateTileHotkeys(t);
   if (hotkeyProblem) return showToast(hotkeyProblem);
 
   const cleaned = { ...t, name: t.name.trim() };
+  // マイク用の設定は、その種類のボタンにだけ残す（種類を変えたあとに、デバイスの紐付けが残らないように）
+  if (cleaned.type !== "micdev") { delete cleaned.micDeviceId; delete cleaned.micDeviceName; delete cleaned.autoMute; }
+  if (cleaned.type !== "mic") delete cleaned.micExcludeIds;
+  // オフ用の色は、オン/オフ用のCSSアイコンを選んでいるボタンの、正しい色（#RRGGBB）だけ残す
+  if (!offColorFor(cleaned)) delete cleaned.offColor;
   if ((cleaned.type === "link" || cleaned.type === "qr") && !/^https?:\/\//i.test(cleaned.url)) cleaned.url = "https://" + cleaned.url.trim();
 
   const exists = tiles.some((x) => x.id === cleaned.id);
@@ -3488,21 +3754,47 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---------- インポート確認 ----------
-function openConfirmImport(data) {
-  const count = Array.isArray(data.tiles) ? data.tiles.length : 0;
+// 読み込む内容の内訳（main.js の検査結果 report から作る）
+function importSummaryHtml(report) {
+  if (!report) return "";
+  const s = report.summary;
+  const lines = [];
+  if (s) {
+    const parts = [];
+    if (s.launch) parts.push(`アプリ・ファイル・フォルダを開く ${s.launch}個`);
+    if (s.urls) parts.push(`リンク ${s.urls}個`);
+    lines.push(`内訳：ボタン${s.total}個${parts.length ? `（${parts.join("／")}）` : ""}`);
+    if (s.launch && Array.isArray(s.targets) && s.targets.length) lines.push(`開く先：${s.targets.map((x) => escapeHtml(x)).join("、")}${s.launch > s.targets.length ? " ほか" : ""}`);
+  }
+  if (report.dropped) lines.push(`読み込めない形式のボタン${report.dropped}個は、取り除きます。`);
+  if (!report.trusted && report.needsConfirm) lines.push(`このPCで書き出したバックアップではないため、アプリ・ファイル・フォルダを開くボタン（${report.needsConfirm}個）は、初めて押すときに確認します。`);
+  lines.push("読み込む前の状態は、自動で保存します。");
+  return `<div class="path-preview" style="margin:0 0 14px;line-height:1.7;">${lines.join("<br>")}</div>`;
+}
+// 読み込む前に、いまの状態を自動で保存する（失敗しても読み込みは続けるが、お知らせする）
+async function autoSaveBeforeImport() {
+  try {
+    const r = await window.api.autoSaveBackup();
+    return r && !r.error ? r.path : null;
+  } catch (e) { return null; }
+}
+function openConfirmImport(data, report) {
+  const count = Array.isArray(data.tiles) ? data.tiles.length : null;
+  const tilesText = count === null ? "ボタンは今のまま、" : `現在登録されているボタン（${tiles.length}個）を、バックアップの内容（${count}個）で上書きし、`;
   modalBodyEl.innerHTML = `
-    <p style="font-size:14px;color:var(--text);margin-bottom:18px;">現在登録されているボタン（${tiles.length}個）を、バックアップの内容（${count}個）で上書きします。よろしいですか？</p>
+    <p style="font-size:14px;color:var(--text);margin-bottom:12px;">${tilesText}${data.settings ? "設定も上書きします" : "設定は今のままにします"}。よろしいですか？</p>
+    ${importSummaryHtml(report)}
     <div class="modal-actions"><button class="btn default" id="cancelImport">キャンセル</button><button class="btn danger" id="confirmImport">上書きする</button></div>
   `;
   document.getElementById("cancelImport").addEventListener("click", closeModal);
   document.getElementById("confirmImport").addEventListener("click", async () => {
-    tiles = Array.isArray(data.tiles) ? data.tiles : [];
+    const savedPath = await autoSaveBeforeImport();
+    if (Array.isArray(data.tiles)) tiles = data.tiles;
     // 同じショートカットキーは1つのボタンにしか設定できないため、バックアップ内で重なっている場合は後のものを未設定にする
-    // 送信用のキーと同じ起動用ショートカットも、同様に未設定にする
     let clearedDup = clearConflictingLaunchHotkeys(tiles);
-    settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
-    removeObsLeftovers(); // 廃止したOBS連携のボタン・接続設定が古いバックアップに入っていても取り除く
-  removeSoundFromMulti(); // マルチ操作に入れたサウンドの動作も、古いバックアップに入っていれば取り除く
+    if (data.settings) settings = { ...DEFAULT_SETTINGS, ...data.settings };
+    removeObsLeftovers(); // 廃止したOBS連携・Discordのボタンや設定が古いバックアップに入っていても取り除く
+    removeSoundFromMulti(); // マルチ操作に入れたサウンドの動作も、古いバックアップに入っていれば取り除く
     await persistTiles();
     await persistSettings();
     currentPage = 0;
@@ -3510,7 +3802,9 @@ function openConfirmImport(data) {
     closeModal();
     renderGrid();
     renderSettingsPanel();
-    showToast(clearedDup ? `バックアップを読み込みました（重なっていたショートカットキー${clearedDup}個は未設定にしました）` : "バックアップを読み込みました");
+    let msg = clearedDup ? `バックアップを読み込みました（重なっていたショートカットキー${clearedDup}個は未設定にしました）` : "バックアップを読み込みました";
+    if (!savedPath) msg += "（読み込み前の自動保存はできませんでした）";
+    showToast(msg);
   });
   overlayEl.classList.add("show");
 }
@@ -3522,9 +3816,9 @@ function openConfirmImport(data) {
 // ・存在しない画面を指す「画面切り替え」は未設定にする
 function buildImportedPageTiles(incoming, otherTiles, pageIndex, pageCount) {
   // 廃止したOBS連携のボタンは、古いバックアップに入っていても読み込まない
-  incoming = incoming.filter((raw) => !(raw && raw.type === "obs"));
+  incoming = incoming.filter((raw) => !(raw && (raw.type === "obs" || raw.type === "discord")));
   const usedIds = new Set(otherTiles.map((t) => t.id));
-  // 他の画面が使っているキー（起動用・送信用のどちらも）は、読み込む起動用ショートカットに使えない
+  // 他の画面が使っているキーは、読み込む起動用ショートカットに使えない
   const usedHotkeys = new Set();
   otherTiles.forEach((o) => hotkeyUsesOfTile(o).forEach((u) => usedHotkeys.add(hotkeyNorm(u.combo))));
   const fixTarget = (p) => (typeof p === "number" && p >= pageCount ? null : p);
@@ -3536,33 +3830,32 @@ function buildImportedPageTiles(incoming, otherTiles, pageIndex, pageCount) {
     if ("targetPage" in t) t.targetPage = fixTarget(t.targetPage);
     if (Array.isArray(t.subActions)) {
       t.subActions = t.subActions
-        .filter((sub) => !(sub && (sub.type === "obs" || sub.type === "sound")))
+        .filter((sub) => !(sub && (sub.type === "obs" || sub.type === "discord" || sub.type === "sound")))
         .map((sub) => (sub && typeof sub === "object" && "targetPage" in sub ? { ...sub, targetPage: fixTarget(sub.targetPage) } : sub));
     }
     return t;
   });
-  // 読み込んだ画面の中の送信キーと同じ起動用ショートカット、他の画面と同じ起動用ショートカット、
-  // 読み込んだ中で重なる起動用ショートカットを、未設定にする
-  const incomingSends = new Set();
-  list.forEach((t) => hotkeyUsesOfTile(t).forEach((u) => { if (u.kind === "send") incomingSends.add(hotkeyNorm(u.combo)); }));
+  // 他の画面と同じ起動用ショートカット、読み込んだ中で重なる起動用ショートカット、Launch-0を開くキーと同じものを、未設定にする
   list.forEach((t) => {
     if (!t.hotkey) return;
     const key = hotkeyNorm(t.hotkey);
-    if (usedHotkeys.has(key) || incomingSends.has(key)) { t.hotkey = ""; clearedHotkeys++; }
+    if (usedHotkeys.has(key) || isLaunch0Hotkey(t.hotkey)) { t.hotkey = ""; clearedHotkeys++; }
     else usedHotkeys.add(key);
   });
   return { tiles: list, clearedHotkeys, cutOff: Math.max(0, incoming.length - 64) };
 }
-function openConfirmImportPage(data) {
+function openConfirmImportPage(data, report) {
   const incoming = (Array.isArray(data.tiles) ? data.tiles : []).filter((t) => t && typeof t === "object");
   const currentCount = tiles.filter((t) => (t.pageIndex || 0) === WINDOW_PAGE_INDEX).length;
   const label = settings.pageCount > 1 ? `画面${WINDOW_PAGE_INDEX + 1}` : "この画面";
   modalBodyEl.innerHTML = `
     <p style="font-size:14px;color:var(--text);margin-bottom:18px;">${label}の現在のボタン（${currentCount}個）と設定を、バックアップの内容（ボタン${incoming.length}個）で上書きします。他の画面は変わりません。よろしいですか？</p>
+    ${importSummaryHtml(report)}
     <div class="modal-actions"><button class="btn default" id="cancelImportPage">キャンセル</button><button class="btn danger" id="confirmImportPage">上書きする</button></div>
   `;
   document.getElementById("cancelImportPage").addEventListener("click", closeModal);
   document.getElementById("confirmImportPage").addEventListener("click", async () => {
+    const savedPath = await autoSaveBeforeImport();
     const otherTiles = tiles.filter((t) => (t.pageIndex || 0) !== WINDOW_PAGE_INDEX);
     const built = buildImportedPageTiles(incoming, otherTiles, WINDOW_PAGE_INDEX, settings.pageCount);
     tiles = [...otherTiles, ...built.tiles];
@@ -3582,6 +3875,7 @@ function openConfirmImportPage(data) {
     let msg = `${label}のバックアップを読み込みました`;
     if (built.clearedHotkeys) msg += `（他の画面と重なるショートカットキー${built.clearedHotkeys}個は未設定にしました）`;
     if (built.cutOff) msg += `（1画面の上限64個を超えた${built.cutOff}個は読み込んでいません）`;
+    if (!savedPath) msg += "（読み込み前の自動保存はできませんでした）";
     showToast(msg);
   });
   overlayEl.classList.add("show");
@@ -3626,10 +3920,25 @@ function renderSettingsPanel() {
   const pt = currentPageTheme();
   settingsBodyEl.innerHTML = `
     <h2 style="font-size:17px;font-weight:700;margin-bottom:10px;">設定</h2>
+    <div class="settings-section boxed">
+      <h3>📱 スマホから操作</h3>
+      <button class="btn default" id="launch0OpenBtn" style="width:100%;">📱 Launch-0（スマホから操作する）</button>
+      <div class="path-preview" style="margin-top:8px;margin-bottom:0;line-height:1.7;">ショートカットキー Ctrl+Shift+Alt+K でも開けます。初めて使うときは、Launch-pass（4桁の数字）を決めます。</div>
+    </div>
+    <div class="settings-section boxed">
+      <h3>📶 Tailscaleの導入手順</h3>
+      <div class="path-preview" style="margin:0;line-height:1.7;">
+        ① PCで tailscale.com/download からWindows版を入れて、アカウント（Google・Microsoft・Apple など）でログインします。<br>
+        ② iPhoneでApp Storeから「Tailscale」を入れ、PCと同じアカウントでログインして、オンにします。<br>
+        ③ 上の「Launch-0」を開き、「Tailscale：使えます」と出ることを確認します（出ないときは「再確認」）。<br>
+        ④ Launch-passを決めて「QRを表示」を押し、スマホで読み取ります。使っている間は、PCとiPhoneの両方でTailscaleをオンにしておきます。
+      </div>
+      <div class="link-row" id="tailscaleGuideLink" style="margin-top:6px;">📖 くわしい使い方を見る</div>
+    </div>
     <div class="settings-section">
       <div class="toggle-row"><span>タイトル（Launch-K）を表示${scope}</span><input type="checkbox" id="showTitleChk" ${pt.showTitle === true ? "checked" : ""} /></div>
       <div class="toggle-row"><span>Windows起動時に自動起動</span><input type="checkbox" id="loginChk" ${settings.launchAtLogin ? "checked" : ""} /></div>
-      <div class="link-row" id="shortcutsLink" style="margin-top:4px;">⌨ ショートカットの管理</div>
+      <div class="link-row" id="shortcutsLink" style="margin-top:4px;">⌨ ショートカットの一覧</div>
     </div>
     <div class="settings-section boxed">
       <h3>画面切替</h3>
@@ -3696,10 +4005,6 @@ function renderSettingsPanel() {
       <h3 style="color:#FF6B5E;">危険な操作</h3>
       <button class="btn danger" id="resetAllBtn" style="width:100%;">すべて初期化する</button>
       <div class="path-preview" style="margin-top:8px;margin-bottom:0;">追加したすべてのボタン・操作・ショートカットキー・見た目の設定を、すべて設定前の初期状態に戻します。元に戻せません。</div>
-    </div>
-    <div class="settings-section boxed">
-      <h3>スマホ操作</h3>
-      <button class="btn default" id="launch0OpenBtn" style="width:100%;">📱 Launch-0（スマホから操作する）</button>
     </div>
   `;
 
@@ -4008,8 +4313,8 @@ function renderSettingsPanel() {
     const result = await window.api.importBackup();
     if (result.error) { if (result.error !== "キャンセルされました") showToast(result.error); return; }
     // 画面単体のバックアップを選んだ場合は、全体を上書きせず、いま開いている画面への読み込みとして確認する
-    if (result.data && result.data.kind === "page") { openConfirmImportPage(result.data); return; }
-    openConfirmImport(result.data || {});
+    if (result.data && result.data.kind === "page") { openConfirmImportPage(result.data, result.report); return; }
+    openConfirmImport(result.data || {}, result.report);
   });
   document.getElementById("exportPageBtn").addEventListener("click", async () => {
     const pageTiles = tiles.filter((t) => (t.pageIndex || 0) === WINDOW_PAGE_INDEX).map((t) => ({ ...t, pageIndex: 0 }));
@@ -4027,7 +4332,7 @@ function renderSettingsPanel() {
       showToast("これは全体のバックアップです。「全体」のインポートから読み込んでください");
       return;
     }
-    openConfirmImportPage(result.data);
+    openConfirmImportPage(result.data, result.report);
   });
 
 
@@ -4070,6 +4375,7 @@ function renderSettingsPanel() {
 
   document.getElementById("resetAllBtn").addEventListener("click", openConfirmReset);
   document.getElementById("launch0OpenBtn").addEventListener("click", () => { closeSettingsPanel(); openLaunch0Confirm(); });
+  document.getElementById("tailscaleGuideLink").addEventListener("click", () => window.api.openGuide());
 }
 
 // ---------- 画面追加：新しい画面の設定の作り方を選ぶ ----------

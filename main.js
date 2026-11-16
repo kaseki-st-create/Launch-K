@@ -4,9 +4,11 @@ const fs = require("fs");
 const { exec, execFile, spawn } = require("child_process");
 const native = require("./native"); // koffiによるuser32.dll直接呼び出し（利用不可ならnative.availableがfalseになる）
 const nativeSnap = require("./native-snap"); // 画面分割（スナップ）専用のkoffi実装。失敗時はPowerShell方式にフォールバック
+const { createMicManager, defaultSpawn } = require("./mic-manager"); // マイクを「すべて列挙して1台ずつ」操作する（COMは専用スレッドで実行。固まっても本体は止まらない）
+const micCore = require("./mic-core");
 const nativeAudio = require("./native-audio"); // マイク／スピーカーのミュート専用のkoffi実装（同じkoffi）。失敗時はPowerShell方式にフォールバック
 const updater = require("./updater"); // 自動アップデート（GitHub Releases）。開発中や読み込み失敗時は何もしない
-const { createRemote } = require("./remote"); // Launch-0（スマホ操作）の通信。ボタンIDだけを受け取る
+const { createRemote, makePassRecord, resetPassState, PASS_RE } = require("./remote"); // Launch-0（スマホ操作）の通信。ボタンIDだけを受け取る
 const tailscale = require("./tailscale"); // Tailscale（VPN）との連携。接続相手が同じアカウントの端末かの確認など
 
 // ---- Launch-0（スマホ操作）の状態 ----
@@ -22,6 +24,24 @@ let launch0ExecDepth = 0;       // スマホから実行中の「ウィンドウ
 let launch0ExecRestore = null;
 
 const ICON_SCRIPT_PATH = path.join(__dirname, "scripts", "get-icon.ps1");
+
+// ---- マイク（録音デバイス）の管理役 ----
+// 配布版では、ワーカーのファイルは app.asar の外（app.asar.unpacked）に出してある（package.json の asarUnpack）。
+const MIC_WORKER_PATH = path.join(__dirname, "mic-worker.js").replace("app.asar" + path.sep, "app.asar.unpacked" + path.sep);
+const micManager = createMicManager({
+  spawn: defaultSpawn(MIC_WORKER_PATH),
+  // 状態が変わったら、すべてのウィンドウに知らせる（画面はこれを受けて、その場で表示を更新する）
+  onChange: () => { for (const w of allAppWindows()) { try { w.webContents.send("mic:changed"); } catch (e) { /* 無視 */ } } },
+});
+// タイル設定から、マイクの定期確認が必要か・「接続した時に自動でミュート」の対象を決めて、管理役に伝える
+function applyMicConfig(tiles) {
+  try {
+    const list = Array.isArray(tiles) ? tiles : [];
+    const needed = process.platform === "win32" && list.some((t) => t && (t.type === "mic" || t.type === "micdev"));
+    const autoMuteIds = list.filter((t) => t && t.type === "micdev" && t.autoMute === true && typeof t.micDeviceId === "string" && t.micDeviceId).map((t) => t.micDeviceId);
+    micManager.configure({ needed, autoMuteIds });
+  } catch (e) { /* マイク設定の失敗で、他の機能を止めない */ }
+}
 
 const CONFIG_PATH = path.join(app.getPath("userData"), "tiles.json");
 const SETTINGS_PATH = path.join(app.getPath("userData"), "settings.json");
@@ -735,6 +755,18 @@ function createTray() {
       },
     },
     {
+      // 非常口：画面が使えない・ミュートしたまま戻せないときに、接続中のすべてのマイクのミュートを解除する
+      label: "すべてのマイクのミュートを解除",
+      click: async () => {
+        let msg = "マイクのミュートを解除しました";
+        try {
+          const r = await micManager.unmuteEverything();
+          if (!r || !r.ok) msg = "一部のマイクのミュートを解除できませんでした";
+        } catch (e) { msg = "マイクの操作に失敗しました"; }
+        try { tray.displayBalloon({ title: "Launch-K", content: msg }); } catch (e) { /* 無視 */ }
+      },
+    },
+    {
       label: "終了",
       click: () => {
         app.isQuitting = true;
@@ -779,6 +811,9 @@ if (!gotSingleInstanceLock) {
   });
 }
 
+// メディアキー（再生/一時停止・次の曲など）を、Launch-K自身（サウンドボタンの再生）が受け取らないようにする。
+// 「メディア」ボタンが送るキーは、いま使っている音楽・動画アプリだけに届く。
+try { app.commandLine.appendSwitch("disable-features", "HardwareMediaKeyHandling,MediaSessionService"); } catch (e) { /* 無視 */ }
 app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return; // 2つ目のプロセスは何も作らず終了する
   // 既定のアプリケーションメニュー（View > Zoom In/Out に Ctrl+Plus/Ctrl+Minus が
@@ -788,9 +823,12 @@ app.whenReady().then(() => {
   // メニューバー自体は autoHideMenuBar で元々非表示なので、完全に取り除いても支障はない。
   Menu.setApplicationMenu(null);
   createWindow();
+  registerLaunch0Hotkey(); // Ctrl+Shift+Alt+K で Launch-0 を開く
   createTray();
+  applyMicConfig(loadTiles());
   updater.init({
     getParentWindow: () => mainWindow,
+    canShowProgressWindow: () => !remoteActive, // スマホ接続中・Launch-0を開いている間は、ゲージの窓は出さない（タスクバーの表示だけ）
     // 閉じてもトレイに残る作りなので、更新のための終了では、ウィンドウ・常駐プロセス・ショートカット登録を
     // すべて片付け、終わるまで待ってからインストーラーを起動する（使用中のファイルを残さないため）。
     prepareQuit: () => prepareQuitForUpdate(),
@@ -805,7 +843,8 @@ app.whenReady().then(() => {
 // リンクは常にOS標準のブラウザで開き、アプリ内に新規ウィンドウを作らせない
 app.on("web-contents-created", (event, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    // 外部で開くのは、http(s) のリンクだけ（file: や独自のURL形式などを、OSにそのまま渡さない）
+    try { if (/^https?:$/i.test(new URL(url).protocol)) shell.openExternal(url); } catch (e) { /* 無効なURLは開かない */ }
     return { action: "deny" };
   });
   // 保険：現状アプリ内に外部URLへ直接遷移させる導線は無いが、万一どこかの
@@ -848,6 +887,9 @@ app.on("window-all-closed", () => {
 });
 
 app.on("will-quit", () => {
+  try { micManager.shutdown(); } catch (e) { /* 無視 */ }
+  // 固まったマイク用スレッドが残っていると、終了が終わらないことがある。念のため、少し待っても終わらなければ強制終了する
+  if (micManager.hasStuck()) setTimeout(() => { try { app.exit(0); } catch (e) { /* 無視 */ } }, 1500);
   try { if (remote) remote.shutdown("app-quit"); } catch (e) { /* 無視 */ }
   if (tooltipWindow && !tooltipWindow.isDestroyed()) tooltipWindow.destroy();
   unregisterAllHotkeys();
@@ -873,15 +915,24 @@ ipcMain.handle("app:showUpdateLog", async () => {
   }
 });
 ipcMain.handle("app:checkForUpdates", () => updater.checkNow(true));
+ipcMain.handle("app:takeUpdatedNotice", () => updater.takeUpdatedNotice());
 
 // ---- タイル設定の読み書き ----
 ipcMain.handle("tiles:load", () => loadTiles());
 ipcMain.handle("tiles:save", (event, tiles) => {
+  // マイクのボタンは、保存の直前に必ず検査する（画面・バックアップ・複製など、どこから来た値でも）：
+  // 同じデバイスを別のボタンに紐付けていたら後のほうを未選択に戻し、不正なデバイスIDは外す。
+  // （検査そのものが失敗しても、保存は止めない。配列でないものは、そのまま扱う）
+  let checked = { tiles, changed: false };
+  try { if (Array.isArray(tiles)) checked = micCore.sanitizeMicTiles(tiles); } catch (e) { checked = { tiles, changed: false }; }
+  tiles = checked.tiles;
   saveTiles(tiles);
+  applyMicConfig(tiles);
   // 複数ウィンドウ（メイン＋ページ別画面）を開いているとき、変更を保存した
   // ウィンドウ以外にも反映されるよう、他の全ウィンドウへ変更を知らせる。
+  // 検査で値を直した場合は、保存した本人のウィンドウにも知らせて、画面に反映させる。
   for (const w of allAppWindows()) {
-    if (w.webContents !== event.sender) w.webContents.send("tiles:changed");
+    if (checked.changed || w.webContents !== event.sender) w.webContents.send("tiles:changed");
   }
   return true;
 });
@@ -1439,8 +1490,8 @@ ipcMain.handle("system:pasteToActiveWindow", async () => {
   return await pressPasteKeys();
 });
 
-// ---- 任意のキーの組み合わせを送信（Discordなど、他アプリ側に割り当てた
-//      キーボードショートカットを間接的に操作するための汎用機能）----
+// ---- キーの組み合わせを送信（基本ショートカットなど、アプリ内部の固定の操作で使う）----
+// （Discordなどへ任意のキーを送るボタンは廃止した）
 // 「Control+Alt+Shift+M」のような文字列を受け取り、各キーのkeydownを押す順、
 // keyupを逆順で送信する。対応するのは英数字1文字＋Control/Alt/Shift/Metaの組み合わせのみ。
 function parseAcceleratorToVkCodes(combo) {
@@ -1510,14 +1561,6 @@ function pressHotkeyComboRaw(combo) {
     error ? (stderr && stderr.toString()) || error.message : null
   );
 }
-ipcMain.handle("system:sendHotkey", async (event, combo) => {
-  if (process.platform !== "win32") return "この機能は現在Windowsのみ対応しています";
-  // 直前まで使っていたウィンドウ（Discordなど）にキーを届けるため、
-  // スナップ・ズームと同様に一旦そちらへフォーカスを戻してから送信する。
-  await restoreExternalFocus();
-  return await pressHotkeyCombo(combo);
-});
-
 // ---- 基本ショートカット（ワンボタン）----
 // 自由なキー登録は受け付けず、ここに書いた固定の組み合わせだけを送る（安全設計）。
 // Ctrl+Alt+Shift+英数字の「起動用ショートカット」とは別物で、衝突しない。
@@ -1585,10 +1628,25 @@ ipcMain.handle("system:basicShortcut", async (event, id) => {
 });
 
 // ---- スリープ・シャットダウン ----
+// スリープは、「休止状態」ではなく、必ず「スリープ」にする。
+// （以前の「rundll32 powrprof.dll,SetSuspendState 0,1,0」は、引数が正しく渡らず、休止状態が有効なPCでは、休止状態になっていた。
+//   PowerState.Suspend を直接指定すれば、休止状態の設定に関係なく、スリープになる）
+function runSleep() {
+  const script = "Add-Type -AssemblyName System.Windows.Forms; [void][System.Windows.Forms.Application]::SetSuspendState([System.Windows.Forms.PowerState]::Suspend, $false, $false)";
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script], { windowsHide: true }, (error, stdout, stderr) => {
+      finish(error ? (stderr && stderr.toString().trim()) || error.message : null);
+    });
+    // スリープに入ると、この命令は、復帰するまで終わらない。起動に失敗したときだけエラーを返し、数秒たっても動いていれば、成功とみなす
+    setTimeout(() => finish(null), 5000);
+  });
+}
 function runPowerAction(action) {
   if (process.platform !== "win32") return Promise.resolve("この機能は現在Windowsのみ対応しています");
+  if (action === "sleep") return runSleep();
   const commands = {
-    sleep: "rundll32.exe powrprof.dll,SetSuspendState 0,1,0",
     shutdown: "shutdown /s /t 0",
     restart: "shutdown /r /t 0",
   };
@@ -2099,40 +2157,39 @@ const CORE_AUDIO_CS =
   "public static int GetMuteState(int flow, int role) { try { var epv = VolFor(flow, role); bool m; epv.GetMute(out m); return m ? 1 : 0; } catch { return -1; } } }";
 const CORE_AUDIO_DEF_SCRIPT = `Add-Type -Language CSharp -TypeDefinition '${CORE_AUDIO_CS.replace(/'/g, "''")}'; `;
 
-function toggleMicMute() {
-  // まず、koffiで直接Core Audioを呼ぶ（PowerShellを起動しないので速い）。何か失敗したら、従来のPowerShell方式で行う。
-  if (nativeAudio.available) {
-    try {
-      return Promise.resolve({ muted: nativeAudio.toggleMicMute() });
-    } catch (e) { /* 従来の方式へ */ }
-  }
-  return toggleMicMutePowerShell();
+// マイクの操作の失敗を、画面に出す日本語にする
+const MIC_ERRORS = {
+  "no-device": "接続中のマイクがありません",
+  "not-connected": "このマイクは接続されていません",
+  "bad-id": "マイクを特定できませんでした。ボタンの設定をやり直してください",
+  busy: "マイクの応答がありません。少し待ってから、もう一度お試しください",
+  timeout: "マイクの応答がありません。少し待ってから、もう一度お試しください",
+  unavailable: "この環境では、マイクの操作を利用できません",
+};
+function micErrorText(r) {
+  if (r && r.failed && r.failed.length && r.error !== "busy") return "一部のマイクを切り替えられませんでした（マイクの状態を確認してください）";
+  return MIC_ERRORS[r && r.error] || "マイクの操作に失敗しました";
 }
-function toggleMicMutePowerShell() {
-  const defScript = CORE_AUDIO_DEF_SCRIPT;
-  // $ErrorActionPreference='Stop'を付けて明示的にtry/catchすることで、セッション経由でも
-  // 例外発生時に必ず「ERROR:メッセージ」という判定可能な文字列が出力されるようにする
-  // （元々はexecの成否だけを見ていたが、セッション経由ではその判定方法が使えないため）。
-  const callScript =
-    "$ErrorActionPreference='Stop'; try { " +
-    "if ([AudioMuteHelper]::ToggleMicMute()) { Write-Output 'MUTED' } else { Write-Output 'UNMUTED' } " +
-    "} catch { Write-Output ('ERROR:' + $_.Exception.Message) }";
-  return runPsSmart("AudioMuteHelper", defScript, callScript).then(({ error, stderr, stdout }) => {
-    const out = String(stdout || "");
-    if (error) return { error: (stderr && stderr.toString()) || error.message };
-    if (out.includes("ERROR:")) return { error: out.slice(out.indexOf("ERROR:") + 6).trim() };
-    // MUTED/UNMUTEDのどちらのマーカーも無い＝想定外の応答なので、必ずエラー扱いにする
-    // （セッション経由で万一マーカーを取りこぼしても、誤って成功扱いにしないための安全策）。
-    if (!out.includes("MUTED") && !out.includes("UNMUTED")) {
-      return { error: "マイクの操作に失敗しました（応答を確認できませんでした）" };
-    }
-    return { muted: out.includes("MUTED") && !out.includes("UNMUTED") };
-  });
-}
-ipcMain.handle("system:mic", async () => {
+// 「全マイクまとめて」：1台でもミュートと確認できていなければミュート、全部ミュート済みなら全部解除。戻り値の muted は、読み直して確認できた実際の状態
+ipcMain.handle("system:mic", async (event, excludeIds) => {
   if (process.platform !== "win32") return { error: "この機能は現在Windowsのみ対応しています" };
-  return await toggleMicMute();
+  const r = await micManager.toggleAll(Array.isArray(excludeIds) ? excludeIds : []);
+  if (!r || !r.ok) return { error: micErrorText(r) };
+  const agg = micCore.aggregate(micCore.allMicTargets(r.devices, Array.isArray(excludeIds) ? excludeIds : []));
+  return { muted: agg.state === "muted" };
 });
+// 「1台だけ」のマイクボタン
+ipcMain.handle("mic:toggleDevice", async (event, deviceId) => {
+  if (process.platform !== "win32") return { error: "この機能は現在Windowsのみ対応しています" };
+  const r = await micManager.toggleDevice(String(deviceId || ""));
+  if (!r || !r.ok) return { error: micErrorText(r) };
+  const d = (r.devices || []).find((x) => x.id === deviceId);
+  return { muted: !!(d && d.muted === true) };
+});
+// 画面・スマホが見る「いまのマイクの状態」（管理役が2秒ごとに読んだ最新。ここでは COM を呼ばない）
+ipcMain.handle("mic:snapshot", () => micManager.snapshot());
+// 設定画面で一覧を出す直前などに、最新を読み直す
+ipcMain.handle("mic:refresh", async () => { try { return await micManager.refresh(); } catch (e) { return micManager.snapshot(); } });
 
 // スピーカーとマイクの「いまの実際のミュート状態」を返す。分からないものは null。
 // 例）{ speaker: true, mic: false }
@@ -2161,7 +2218,9 @@ async function readMuteStatesPowerShell() {
 ipcMain.handle("audio:getMuteStates", async () => {
   if (process.platform !== "win32") return { speaker: null, mic: null };
   try {
-    return await readMuteStates();
+    const r = await readMuteStates();
+    // マイクの状態は mic:snapshot（専用スレッドで読む）を使う。ここでは返さない
+    return Object.assign({}, r, { mic: null });
   } catch (e) {
     return { speaker: null, mic: null };
   }
@@ -2219,19 +2278,21 @@ ipcMain.handle("shell:getFileIcon", async (event, targetPath) => {
 let timerWindow = null;
 let timerAlwaysOnTopEnabled = true; // タイマー画面側のロック状態をメインプロセス側でも把握しておく
 let timerSuspendReassert = false; // ネイティブの色選択ポップアップ表示中など、一時的にロック再適用を止めるためのフラグ
-function createOrShowTimerWindow(seconds) {
-  if (remoteActive) return; // スマホ接続中は、Launch-0以外を開かない
+function createOrShowTimerWindow(seconds, opts) {
+  // スマホ接続中は、Launch-0以外を開かない。ただし、スマホからタイマーのボタンを押したとき（Launch-0の中からの要求）は、PCでタイマー画面を開く
+  if (remoteActive && !(opts && opts.fromLaunch0)) return;
   if (timerWindow && !timerWindow.isDestroyed()) {
     timerWindow.show();
     timerWindow.focus();
+    try { timerWindow.moveTop(); } catch (e) { /* 無視 */ }
     if (seconds) timerWindow.webContents.send("timer:start", Math.max(1, Math.round(Number(seconds))));
     return;
   }
   timerWindow = new BrowserWindow({
-    width: 300,
-    height: 390,
-    minWidth: 230,
-    minHeight: 300,
+    width: 380, // ハンバーガーメニューを開いても、横のスクロールバーが出ないように、少し広くした
+    height: 470,
+    minWidth: 300,
+    minHeight: 340,
     resizable: true, // ウィンドウ比率に応じて文字サイズが追従するようにするため、サイズ変更を許可
     minimizable: true,
     maximizable: false,
@@ -2250,7 +2311,7 @@ function createOrShowTimerWindow(seconds) {
   });
   timerWindow.setMenuBarVisibility(false);
   timerWindow.loadFile("timer.html");
-  timerWindow.once("ready-to-show", () => timerWindow.show());
+  timerWindow.once("ready-to-show", () => { timerWindow.show(); try { timerWindow.moveTop(); } catch (e) { /* 無視 */ } });
   // 常に最前面ロック中でも、このウィンドウ自身が開くネイティブの色選択ポップアップなどが
   // 裏に隠れてしまわないよう、メインウィンドウと同じ仕組み（一時停止→再フォーカスで再適用）を用意する。
   timerWindow.on("blur", () => {
@@ -2271,10 +2332,11 @@ function createOrShowTimerWindow(seconds) {
       timerWindow.webContents.send("timer:start", Math.max(1, Math.round(Number(seconds))));
     });
   }
-  timerWindow.on("closed", () => { timerWindow = null; });
+  timerWindow.on("closed", () => { timerWindow = null; broadcastTimerState(); });
+  broadcastTimerState();
 }
 ipcMain.handle("timer:open", (event, seconds) => {
-  createOrShowTimerWindow(seconds);
+  createOrShowTimerWindow(seconds, { fromLaunch0: isLaunch0Sender(event) });
   return true;
 });
 ipcMain.on("timer:setAlwaysOnTop", (event, val) => {
@@ -2285,6 +2347,18 @@ ipcMain.handle("timer:suspendAlwaysOnTop", () => {
   timerSuspendReassert = true;
   if (timerWindow && !timerWindow.isDestroyed()) timerWindow.setAlwaysOnTop(false);
   return true;
+});
+// タイマー画面が開いているかを、ボタンのある画面すべてに知らせる（開いている間は、タイマーのボタンを少し暗くする。押せなくはならない）
+function timerIsOpen() { return !!(timerWindow && !timerWindow.isDestroyed()); }
+function broadcastTimerState() {
+  const open = timerIsOpen();
+  for (const w of [mainWindow, launch0Window, ...pageWindows.values()]) {
+    try { if (w && !w.isDestroyed()) w.webContents.send("timer:state", open); } catch (e) { /* 無視 */ }
+  }
+}
+ipcMain.handle("timer:isOpen", () => timerIsOpen());
+ipcMain.on("timer:minimize", () => {
+  if (timerWindow && !timerWindow.isDestroyed()) timerWindow.minimize();
 });
 ipcMain.on("timer:close", () => {
   if (timerWindow && !timerWindow.isDestroyed()) timerWindow.close();
@@ -2337,7 +2411,7 @@ ipcMain.on("guide:close", () => {
   if (guideWindow && !guideWindow.isDestroyed()) guideWindow.close();
 });
 
-// ---- ショートカットの管理（一覧を見るだけの別ウィンドウ）----
+// ---- ショートカットの一覧（一覧を見るだけの別ウィンドウ）----
 let shortcutsWindow = null;
 function createOrShowShortcutsWindow() {
   if (remoteActive) return;
@@ -2358,7 +2432,7 @@ function createOrShowShortcutsWindow() {
     alwaysOnTop: false,
     frame: false,
     show: false,
-    title: "ショートカットの管理",
+    title: "ショートカットの一覧",
     icon: process.platform === "win32" ? path.join(__dirname, "assets", "icon.ico") : undefined,
     webPreferences: {
       preload: path.join(__dirname, "shortcuts-preload.js"),
@@ -2380,6 +2454,9 @@ ipcMain.handle("shortcuts:getData", () => {
   const settings = loadSettings();
   const pageCount = Math.max(1, Math.min(6, Number(settings && settings.pageCount) || 1));
   return { tiles: loadTiles(), pageCount };
+});
+ipcMain.on("shortcuts:setAlwaysOnTop", (event, val) => {
+  if (shortcutsWindow && !shortcutsWindow.isDestroyed()) shortcutsWindow.setAlwaysOnTop(!!val, "screen-saver");
 });
 ipcMain.on("shortcuts:close", () => {
   if (shortcutsWindow && !shortcutsWindow.isDestroyed()) shortcutsWindow.close();
@@ -2432,6 +2509,7 @@ function ensureRemote() {
     mobileHtmlPath: path.join(__dirname, "mobile.html"),
     appVersion: app.getVersion(),
     tailscale: tsClient,
+    getPass: () => loadPassRecord(),
     emit: (evt) => {
       if (evt.type === "tap") rememberForegroundWindowAsExternal(); // ズーム・画面分割の対象（いま前面にある他アプリ）を記録
       sendToLaunch0("remote:event", evt);
@@ -2492,7 +2570,9 @@ function openLaunch0() {
   launch0Locked = isPageLocked(loadSettings(), 0);
   if (launch0Locked) win.setAlwaysOnTop(true, "screen-saver");
   win.on("blur", () => {
-    if (launch0Locked && !win.isDestroyed()) win.setAlwaysOnTop(true, "screen-saver");
+    // スマホから開いたタイマー画面がフォーカスを持っている間は、Launch-0が前面を取り戻さない（タイマー画面が裏に隠れないように）
+    const timerHasFocus = !!(timerWindow && !timerWindow.isDestroyed() && timerWindow.isFocused());
+    if (launch0Locked && !win.isDestroyed() && !timerHasFocus) win.setAlwaysOnTop(true, "screen-saver");
     rememberForegroundWindowAsExternal();
   });
   win.on("focus", handleAnyWindowFocus);
@@ -2517,13 +2597,26 @@ function openLaunch0() {
   win.on("closed", () => {
     if (launch0Window === win) { launch0Window = null; closeLaunch0("closed", { force: true }); }
   });
-  // PCがスリープ・画面ロックしたら、切断する
-  const onSuspend = () => { if (remote) remote.disconnect("pc-sleep"); };
-  const onLock = () => { if (remote) remote.disconnect("pc-lock"); };
+  // PCがスリープ・休止・画面ロックしても、切断はしない。スマホには「PCがロックされています」と知らせ、ボタンを使えなくする。
+  // 戻ったときの扱い（15分未満は自動で復帰／15分以上はLaunch-pass／30分超は切断）は remote.js が行う。
+  // ※スリープと休止は、Electronの通知（suspend）では区別できない。休止から戻った場合は、復帰後の接続の確認で、つながらなければ切断になる。
+  // ※再起動・シャットダウン・ログオフは、アプリが終了するときに切断する（will-quit）。
+  pcSuspended = false; pcLocked = false;
+  const syncAway = () => {
+    if (!remote) return;
+    try { if (pcSuspended || pcLocked) remote.pcAway(pcSuspended ? "sleep" : "lock"); else remote.pcBack(); } catch (e) { /* 無視 */ }
+  };
+  const onSuspend = () => { pcSuspended = true; syncAway(); };
+  const onResume = () => { pcSuspended = false; syncAway(); };
+  const onLock = () => { pcLocked = true; syncAway(); };
+  const onUnlock = () => { pcLocked = false; syncAway(); };
   powerMonitor.on("suspend", onSuspend);
+  powerMonitor.on("resume", onResume);
   powerMonitor.on("lock-screen", onLock);
-  launch0PowerHandlers.push(["suspend", onSuspend], ["lock-screen", onLock]);
+  powerMonitor.on("unlock-screen", onUnlock);
+  launch0PowerHandlers.push(["suspend", onSuspend], ["resume", onResume], ["lock-screen", onLock], ["unlock-screen", onUnlock]);
 }
+let pcSuspended = false, pcLocked = false; // PCがスリープ・休止中／画面ロック中
 const launch0PowerHandlers = [];
 function closeLaunch0(reason, opts) {
   if (launch0Closing) return;
@@ -2555,9 +2648,12 @@ function closeLaunch0(reason, opts) {
   const w = launch0Window;
   launch0Window = null;
   if (w && !w.isDestroyed()) { try { w.destroy(); } catch (e) { /* 無視 */ } }
+  // スマホから開いたタイマー画面は、接続が終わるとき（Launch-0を閉じるとき）に、確認なしで閉じる
+  if (timerWindow && !timerWindow.isDestroyed()) { try { timerWindow.close(); } catch (e) { /* 無視 */ } }
   remoteActive = false;
   launch0Locked = false;
   lastHotkeySignature = null; // 止めていたショートカットキーを、あらためて登録できるようにする
+  registerLaunch0Hotkey();
   if (app.isQuitting) return;
   // 画面1を表示する（他の画面は元に戻さない）
   try {
@@ -2606,13 +2702,39 @@ ipcMain.handle("launch0:close", (event, reason) => {
   setImmediate(() => closeLaunch0(r));
   return true;
 });
+// ---- Launch-pass（4桁の数字）：PCで決める。平文では保存せず、ソルト付きハッシュだけを保存する ----
+const PASS_FILE = path.join(app.getPath("userData"), "launch0-pass.json");
+let passRecordCache;
+function loadPassRecord() {
+  if (passRecordCache !== undefined) return passRecordCache;
+  try {
+    const j = JSON.parse(fs.readFileSync(PASS_FILE, "utf-8"));
+    passRecordCache = j && j.v === 1 && /^[0-9a-f]{32}$/.test(String(j.salt)) && /^[0-9a-f]{64}$/.test(String(j.hash)) ? { v: 1, salt: j.salt, hash: j.hash } : null;
+  } catch (e) { passRecordCache = null; }
+  return passRecordCache;
+}
+ipcMain.handle("launch0:passStatus", (event) => (isLaunch0Sender(event) ? { set: !!loadPassRecord() } : null));
+ipcMain.handle("launch0:setPass", (event, pass) => {
+  if (!isLaunch0Sender(event)) return { ok: false, error: "denied" };
+  if (remote && remote.status().running) return { ok: false, error: "running" }; // 接続の準備中・接続中は変えられない（接続の前に決める）
+  if (typeof pass !== "string" || !PASS_RE.test(pass)) return { ok: false, error: "format" };
+  try {
+    const rec = makePassRecord(pass);
+    const tmp = PASS_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(rec), { encoding: "utf-8", mode: 0o600 });
+    fs.renameSync(tmp, PASS_FILE);
+    passRecordCache = rec;
+    resetPassState();
+    return { ok: true };
+  } catch (e) { return { ok: false, error: "write" }; }
+});
 ipcMain.handle("remote:start", async (event, args) => {
   if (!isLaunch0Sender(event)) return { error: "denied" };
   try {
     return await ensureRemote().start(args || {});
   } catch (e) {
     const m = e && e.message ? String(e.message) : "";
-    return { error: m === "no-lan" || m === "tailscale-unavailable" || /^ts-[a-z-]+$/.test(m) ? m : "failed" };
+    return { error: m === "no-lan" || m === "no-pass" || m === "tailscale-unavailable" || /^ts-[a-z-]+$/.test(m) ? m : "failed" };
   }
 });
 // Tailscaleの状態（入っているか・動いているか・このPCのアカウントなど）。画面に出す最小限の情報だけ返す
@@ -2628,31 +2750,72 @@ ipcMain.handle("launch0:tsStatus", async (event) => {
   }
 });
 // ---- Windowsファイアウォール：Tailscale用の許可の確認・追加（追加は管理者の確認が出る） ----
-const FW_RULE_NAME = "Launch-K Launch-0 (Tailscale)";
-function fwRuleExists() {
+// 開発時(npm start)とインストール版で、規則名を分ける（実行ファイルが違うため、互いに上書きしないように）
+const FW_RULE_NAME = "Launch-K Launch-0 (Tailscale)" + (app.isPackaged ? "" : " (dev)");
+const FW_SAVED_PATH_FILE = path.join(app.getPath("userData"), "launch0-fw.json"); // 規則を追加したときの実行ファイルの場所（netsh の出力が文字化けしても判定できるよう、控えておく）
+function fwSavedPath() {
+  try { return String(JSON.parse(fs.readFileSync(FW_SAVED_PATH_FILE, "utf-8")).program || ""); } catch (e) { return ""; }
+}
+function fwNormPath(t) { return String(t || "").replace(/\//g, "\\").toLowerCase(); }
+// 規則の状態：exists=規則がある／pathOk=その規則が「いまの実行ファイル」を指している
+// 判定は、netsh の出力に今の実行ファイルの場所が含まれるか（日本語環境のため UTF-8 と Shift_JIS の両方で読む）。
+// 読めなかった場合に備え、規則を追加したときに控えた場所とも照らし合わせる。見出しの文言（言語で変わる）には頼らない。
+function fwRuleStatus() {
   return new Promise((resolve) => {
-    if (process.platform !== "win32") return resolve(false);
-    require("child_process").execFile("netsh", ["advfirewall", "firewall", "show", "rule", "name=" + FW_RULE_NAME], { windowsHide: true, timeout: 8000 }, (err) => resolve(!err));
+    if (process.platform !== "win32") return resolve({ exists: false, pathOk: false });
+    execFile("netsh", ["advfirewall", "firewall", "show", "rule", "name=" + FW_RULE_NAME, "verbose"], { windowsHide: true, timeout: 8000, encoding: "buffer" }, (err, stdout) => {
+      if (err) return resolve({ exists: false, pathOk: false });
+      const want = fwNormPath(process.execPath);
+      const buf = Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout || ""));
+      let hit = false;
+      for (const enc of ["utf-8", "shift_jis"]) {
+        try { if (fwNormPath(new TextDecoder(enc).decode(buf)).includes(want)) { hit = true; break; } } catch (e) { /* 次の読み方へ */ }
+      }
+      if (!hit && fwNormPath(fwSavedPath()) === want) hit = true;
+      // 日本語以外のWindowsで、ユーザー名に漢字などがあり、出力が文字化けして読めないときの最後の手段：
+      // 日本語（ASCII以外）の部分を取り除いた「骨組み」（例：c:\users\\appdata\local\programs\launch-k\launch-k.exe）が含まれていれば、合っているとみなす。
+      // （実際は合っているのに、「場所が違います」と誤って警告しないため）
+      if (!hit && /[^\x00-\x7f]/.test(want)) {
+        const skeleton = (t) => t.replace(/[^\x00-\x7f]/g, "");
+        const wantSk = skeleton(want);
+        for (const enc of ["utf-8", "shift_jis", "latin1"]) {
+          try { if (skeleton(fwNormPath(new TextDecoder(enc).decode(buf))).includes(wantSk)) { hit = true; break; } } catch (e) { /* 次へ */ }
+        }
+      }
+      resolve({ exists: true, pathOk: hit });
+    });
   });
 }
 ipcMain.handle("launch0:fwCheck", async (event) => {
   if (!isLaunch0Sender(event)) return null;
-  return { supported: process.platform === "win32", exists: await fwRuleExists() };
+  const st = await fwRuleStatus();
+  return { supported: process.platform === "win32", exists: st.exists, pathOk: st.pathOk };
 });
 ipcMain.handle("launch0:fwAdd", async (event) => {
   if (!isLaunch0Sender(event)) return { ok: false };
   if (process.platform !== "win32") return { ok: false };
-  // このアプリが、Tailscaleの番号帯（100.64.0.0/10）の中だけで受け付ける規則を1つ追加する。固定の文字列だけを使う。
-  const args = [
-    "advfirewall", "firewall", "add", "rule", 'name="' + FW_RULE_NAME + '"', "dir=in", "action=allow", "protocol=TCP",
-    'program="' + process.execPath + '"', "localip=100.64.0.0/10", "remoteip=100.64.0.0/10", "profile=any", "enable=yes",
-  ];
-  const psList = args.map((a) => "'" + String(a).replace(/'/g, "''") + "'").join(",");
-  const cmd = "Start-Process -FilePath netsh -ArgumentList @(" + psList + ") -Verb RunAs -Wait -WindowStyle Hidden";
-  await new Promise((resolve) => {
-    require("child_process").execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cmd], { windowsHide: true, timeout: 60000 }, () => resolve());
+  // このアプリが、Tailscaleの番号帯（100.64.0.0/10）の中だけで受け付ける規則を1つ用意する。固定の文字列だけを使う。
+  // すでに同名の規則があれば「削除せずに」実行ファイルの場所などを書き換える（途中でやめても、元の規則が消えない）。無ければ追加する。
+  // 管理者の確認（UAC）は1回だけ。結果は「終了コード」で受け取る（管理者権限のスクリプトが、一般ユーザーが書き換えられる場所にファイルを書くことはしない）。
+  const q = (a) => "'" + String(a).replace(/'/g, "''") + "'";
+  const setArgs = ["advfirewall", "firewall", "set", "rule", 'name="' + FW_RULE_NAME + '"', "new", 'program="' + process.execPath + '"', "localip=100.64.0.0/10", "remoteip=100.64.0.0/10", "profile=any", "enable=yes"];
+  const addArgs = ["advfirewall", "firewall", "add", "rule", 'name="' + FW_RULE_NAME + '"', "dir=in", "action=allow", "protocol=TCP", 'program="' + process.execPath + '"', "localip=100.64.0.0/10", "remoteip=100.64.0.0/10", "profile=any", "enable=yes"];
+  const inner =
+    "$ErrorActionPreference='Stop'; $code=1; try { " +
+    "$p = Start-Process -FilePath netsh -ArgumentList @(" + setArgs.map(q).join(",") + ") -Wait -PassThru -WindowStyle Hidden; $code = $p.ExitCode; " +
+    "if ($code -ne 0) { $r = Start-Process -FilePath netsh -ArgumentList @(" + addArgs.map(q).join(",") + ") -Wait -PassThru -WindowStyle Hidden; $code = $r.ExitCode } " +
+    "} catch { $code = 1 }; exit $code";
+  const encoded = Buffer.from(inner, "utf16le").toString("base64");
+  // 管理者側の終了コードを、そのまま外側の終了コードにする。UACで「いいえ」を選ぶと Start-Process が失敗して、0以外で終わる
+  const cmd = "$p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand','" + encoded + "'); exit $p.ExitCode";
+  const succeeded = await new Promise((resolve) => {
+    execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cmd], { windowsHide: true, timeout: 60000 }, (err) => resolve(!err));
   });
-  return { ok: await fwRuleExists() };
+  // 0以外で終わった・管理者の確認で「いいえ」・時間切れのときは、失敗（このとき元の規則は変わらない）
+  if (!succeeded) return { ok: false };
+  try { fs.writeFileSync(FW_SAVED_PATH_FILE, JSON.stringify({ program: process.execPath }), "utf-8"); } catch (e) { /* 控えが書けなくても、規則自体は有効 */ }
+  const st = await fwRuleStatus();
+  return { ok: st.exists };
 });
 // ---- スマホから実行する間だけ、Launch-0を前面から外す ----
 // マルチ操作や画面分割は「いま前面にあるウィンドウ」にキーを送る。Launch-0が前面に残っていると、
@@ -2701,27 +2864,34 @@ ipcMain.on("remote:pushState", (event, state) => {
   if (!isLaunch0Sender(event) || !remote || !state || typeof state !== "object") return;
   const pick = (v) => (v === true ? true : v === false ? false : null);
   const out = { speaker: pick(state.speaker), mic: pick(state.mic) };
-  // サウンドボタンごとの状態（"snd:ボタンID" → true/false）。キーの形と個数を確かめてから通す
+  // サウンドボタンごとの状態（"snd:ボタンID"）と、マイクボタンごとの状態（"mic:ボタンID"）→ サウンドは true/false、マイクは true/false か決まった文字。キーの形と個数を確かめてから通す
   let n = 0;
   for (const k of Object.keys(state)) {
     if (n >= 256) break;
     if (/^snd:[A-Za-z0-9_-]{1,64}$/.test(k) && typeof state[k] === "boolean") { out[k] = state[k]; n += 1; }
+    // マイクは、true/false のほかに、決まった6つの文字（muted / open / partial / unknown / none / unselected）だけ通す
+    else if (/^mic:[A-Za-z0-9_-]{1,64}$/.test(k) && (typeof state[k] === "boolean" || state[k] === "muted" || state[k] === "open" || state[k] === "partial" || state[k] === "unknown" || state[k] === "none" || state[k] === "unselected")) { out[k] = state[k]; n += 1; }
   }
   remote.pushState(out);
 });
 // 画像アイコンを、スマホ用に小さなPNGにして返す（保存されているボタンに設定された画像だけ）
-ipcMain.handle("launch0:iconData", async (event, tileId) => {
+ipcMain.handle("launch0:iconData", async (event, tileId, off) => {
   if (!isLaunch0Sender(event)) return "";
   try {
     const t = loadTiles().find((x) => x && x.id === tileId);
-    const v = t && t.icon && t.icon.kind === "image" ? t.icon.value : "";
+    const v = t && t.icon && t.icon.kind === "image" ? (off === true ? t.icon.offValue : t.icon.value) : ""; // off：ミュート中の表示に選んだ画像
     if (typeof v !== "string" || !v) return "";
     if (v.startsWith("data:image/")) return v.length < 700000 ? v : "";
     const ext = path.extname(v).toLowerCase();
     if (ext === ".gif" || ext === ".webp") {
       const st = fs.statSync(v);
       if (st.size > 500 * 1024) return "";
-      return "data:image/" + ext.slice(1) + ";base64," + fs.readFileSync(v).toString("base64");
+      const buf = fs.readFileSync(v);
+      // 拡張子だけでなく、中身が本当にその画像かも確かめる（画像以外のファイルを、スマホへ送らないため）
+      const head = buf.slice(0, 4).toString("latin1");
+      const okMagic = ext === ".gif" ? head === "GIF8" : head === "RIFF" && buf.slice(8, 12).toString("latin1") === "WEBP";
+      if (!okMagic) return "";
+      return "data:image/" + ext.slice(1) + ";base64," + buf.toString("base64");
     }
     const img = nativeImage.createFromPath(v);
     if (!img || img.isEmpty()) return "";
@@ -2735,8 +2905,31 @@ ipcMain.handle("launch0:iconData", async (event, tileId) => {
 
 let lastHotkeySignature = null;
 let lastHotkeyFailed = [];
+// ショートカットキーの比較用の形：大文字小文字・修飾キーの並び順・別名（Ctrl/Control/CommandOrControl など）の違いを同じものとして扱う
 function hotkeyMapKey(accelerator) {
-  return String(accelerator || "").toLowerCase();
+  const parts = String(accelerator || "").split("+").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const mods = new Set();
+  let key = "";
+  for (const p of parts) {
+    if (p === "ctrl" || p === "control" || p === "commandorcontrol" || p === "cmdorctrl") mods.add("control");
+    else if (p === "alt" || p === "option") mods.add("alt");
+    else if (p === "shift") mods.add("shift");
+    else if (p === "meta" || p === "super" || p === "win" || p === "windows" || p === "cmd" || p === "command") mods.add("meta");
+    else key = p;
+  }
+  return [...["control", "alt", "shift", "meta"].filter((m) => mods.has(m)), key].join("+");
+}
+// Launch-0を開くキー（予約。ボタンには登録できない）。スマホ接続中・Launch-0を開いている間は効かない
+const LAUNCH0_HOTKEY = "Control+Shift+Alt+K";
+function registerLaunch0Hotkey() {
+  try {
+    if (remoteActive || app.isQuitting) return;
+    if (globalShortcut.isRegistered(LAUNCH0_HOTKEY)) return;
+    globalShortcut.register(LAUNCH0_HOTKEY, () => {
+      if (remoteActive || app.isQuitting) return;
+      try { openLaunch0(); } catch (e) { try { closeLaunch0("error", { force: true }); } catch (e2) { /* 無視 */ } }
+    });
+  } catch (e) { /* 登録できなくても、ほかの機能は続ける */ }
 }
 // すべての起動用ショートカットの登録を解除し、記憶もリセットする
 function unregisterAllHotkeys() {
@@ -2749,7 +2942,7 @@ ipcMain.handle("hotkeys:register", (event, list) => {
   if (remoteActive) return []; // スマホ接続中は、起動用ショートカットキー（グローバル）を登録しない
   const clean = [];
   const failed = [];
-  const seen = new Set();
+  const seen = new Set([hotkeyMapKey(LAUNCH0_HOTKEY)]); // Launch-0を開くキーは予約済み（ボタンには登録しない）
   (Array.isArray(list) ? list : []).forEach((item) => {
     if (!item || typeof item.accelerator !== "string" || !item.accelerator) return;
     const key = hotkeyMapKey(item.accelerator);
@@ -2778,6 +2971,7 @@ ipcMain.handle("hotkeys:register", (event, list) => {
       failed.push(accelerator);
     }
   });
+  registerLaunch0Hotkey();
   lastHotkeySignature = signature;
   lastHotkeyFailed = failed.slice();
   return failed;
@@ -3018,6 +3212,23 @@ ipcMain.handle("app:reset", (event) => {
 });
 
 // ---- 設定のバックアップ／復元 ----
+// 書き出し：このPCだけが持つ鍵で署名を付ける（このPCで書き出したものは、読み込むとき「自分のバックアップ」と分かる）。
+// 読み込み：第三者から受け取ったファイルでも安全なように、backup-sanitize.js で、知っている項目だけを型・長さ・範囲つきで残す。
+// 読み込む前に、いまの状態を自動で保存しておく（userData/backups。新しい10件だけ残す）。
+const backupSanitize = require("./backup-sanitize");
+let backupKeyCache = null;
+function getBackupKey() {
+  if (backupKeyCache) return backupKeyCache;
+  const keyPath = path.join(app.getPath("userData"), "backup-key.bin");
+  try {
+    const k = fs.readFileSync(keyPath);
+    if (k.length === 32) { backupKeyCache = k; return k; }
+  } catch (e) { /* なければ作る */ }
+  const k = require("crypto").randomBytes(32);
+  try { fs.writeFileSync(keyPath, k, { mode: 0o600 }); } catch (e) { /* 書けなくても、このまま使う */ }
+  backupKeyCache = k;
+  return k;
+}
 ipcMain.handle("backup:export", async (event, data, defaultName) => {
   // 画面単体のバックアップでは「mission-deck-screen2.json」のような名前を初期値にする（安全な文字だけ許可）
   const safeName = typeof defaultName === "string" && /^[\w.\-]{1,60}\.json$/.test(defaultName) ? defaultName : "mission-deck-backup.json";
@@ -3026,46 +3237,50 @@ ipcMain.handle("backup:export", async (event, data, defaultName) => {
   const result = await runDialogOnTop(win, (w) => (w ? dialog.showSaveDialog(w, saveOptions) : dialog.showSaveDialog(saveOptions)));
   if (result.canceled || !result.filePath) return "キャンセルされました";
   try {
-    fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), "utf-8");
+    const out = data && typeof data === "object" && Array.isArray(data.tiles)
+      ? { ...data, signature: backupSanitize.signTiles(getBackupKey(), JSON.parse(JSON.stringify(data.tiles))) } // 書き出した文字列と同じ形で署名する（undefinedの項目は消える）
+      : data;
+    fs.writeFileSync(result.filePath, JSON.stringify(out, null, 2), "utf-8");
     return null;
   } catch (e) {
     return e.message;
   }
 });
-
-// バックアップJSONは外部ファイル（第三者から受け取ったものを含む）由来のため、
-// 中身は信用しない前提で最低限の形だけをここで保証する。個々のタイルのフィールドは
-// 種類が多く数値/文字列いずれも取り得るため、詳細な検証はレンダラー側の描画時
-// （エスケープ・safeColor等）で行い、ここでは「オブジェクトの配列／オブジェクト」
-// という構造だけを壊れたデータから守る。
-function sanitizeBackupData(raw) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out = {};
-  if (Array.isArray(raw.tiles)) {
-    out.tiles = raw.tiles.filter((t) => t && typeof t === "object" && !Array.isArray(t));
-  }
-  if (raw.settings && typeof raw.settings === "object" && !Array.isArray(raw.settings)) {
-    out.settings = raw.settings;
-  }
-  // 画面単体のバックアップ（kind: "page"）：その画面のボタンと、画面ごとの設定だけを持つ
-  if (raw.kind === "page") {
-    out.kind = "page";
-    if (raw.pageSettings && typeof raw.pageSettings === "object" && !Array.isArray(raw.pageSettings)) {
-      out.pageSettings = raw.pageSettings;
-    }
-  }
-  return out;
-}
 ipcMain.handle("backup:import", async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
   const openOptions = { properties: ["openFile"], filters: [{ name: "JSON", extensions: ["json"] }] };
   const result = await runDialogOnTop(win, (w) => (w ? dialog.showOpenDialog(w, openOptions) : dialog.showOpenDialog(openOptions)));
   if (result.canceled || result.filePaths.length === 0) return { error: "キャンセルされました" };
   try {
-    const raw = fs.readFileSync(result.filePaths[0], "utf-8");
-    const parsed = JSON.parse(raw);
-    return { data: sanitizeBackupData(parsed) };
+    const file = result.filePaths[0];
+    const st = fs.statSync(file);
+    if (!st.isFile()) return { error: "ファイルを選んでください" };
+    if (st.size > backupSanitize.MAX_FILE_BYTES) return { error: "ファイルが大きすぎます（Launch-Kのバックアップではない可能性があります）" };
+    let text = fs.readFileSync(file, "utf-8");
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // メモ帳などが付けるBOM
+    const parsed = JSON.parse(text);
+    const trusted = !!(parsed && typeof parsed === "object" && Array.isArray(parsed.tiles) && backupSanitize.verifySignature(getBackupKey(), parsed.tiles, parsed.signature));
+    const r = backupSanitize.sanitizeBackup(parsed, { trusted });
+    if (!r.ok) return { error: r.error };
+    return { data: r.data, report: r.report };
   } catch (e) {
-    return { error: "読み込みに失敗しました：" + e.message };
+    return { error: "読み込みに失敗しました：" + (e instanceof SyntaxError ? "JSONの形式が正しくありません" : e.message) };
+  }
+});
+// 読み込む前の自動保存（取り込みに失敗しても、元に戻せるように）
+ipcMain.handle("backup:autoSave", async () => {
+  try {
+    const dir = path.join(app.getPath("userData"), "backups");
+    fs.mkdirSync(dir, { recursive: true });
+    const d = new Date();
+    const p2 = (n) => String(n).padStart(2, "0");
+    const file = path.join(dir, `before-import-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.json`);
+    const tiles = loadTiles();
+    fs.writeFileSync(file, JSON.stringify({ tiles, settings: loadSettings(), signature: backupSanitize.signTiles(getBackupKey(), JSON.parse(JSON.stringify(Array.isArray(tiles) ? tiles : []))) }, null, 2), "utf-8");
+    const olds = fs.readdirSync(dir).filter((n) => /^before-import-.*\.json$/.test(n)).sort();
+    while (olds.length > 10) { try { fs.unlinkSync(path.join(dir, olds.shift())); } catch (e) { break; } }
+    return { path: file };
+  } catch (e) {
+    return { error: e.message };
   }
 });

@@ -6,7 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "set CSC_IDENTITY_AUTO_DISCOVERY=false&&node scripts/build-win.js"
+    "build": "set CSC_IDENTITY_AUTO_DISCOVERY=false&&electron-builder"
   },
   "devDependencies": {
     "electron": "^44.9.1",
@@ -34,8 +34,7 @@
       "**/*",
       "!dist/**",
       "!tools/**",
-      "!docs/**",
-      "!scripts/**"
+      "!docs/**"
     ],
     "win": {
       "target": "nsis",

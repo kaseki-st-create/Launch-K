@@ -13,7 +13,7 @@
 // ============================================================================
 
 // ---- スマホから実行しない種類（ここを変えれば調整できる） ----
-const L0_BLOCKED_TYPES = new Set(["pageswitch", "timer", "qr", "power"]);
+const L0_BLOCKED_TYPES = new Set(["pageswitch", "qr", "power"]); // スマホから押せないボタン。タイマーは、スマホから押すと、PCでタイマー画面が開く
 const L0_SAFE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 let l0Locked = false;           // Launch-0ウィンドウのロック（常に最前面）
@@ -30,6 +30,8 @@ const l0 = {
   log: [],
   paused: false,
   stalled: false,
+  stalledInfo: null,            // { since: 最後に応答があった時刻, dropAt: 切断する時刻 }
+  hiddenInfo: null,             // スマホの画面が裏に回って2分たったとき { since, dropAt }
   phonePage: null,
   warn: null,                   // { kind, until }
   mode: "tailscale",            // 接続方法はTailscaleだけ（同じWi-Fiモードは廃止）
@@ -57,6 +59,7 @@ function l0OnToast(msg) { if (l0ToastSink) l0ToastSink.push(String(msg)); }
 function l0IsBlocked(t) {
   if (!t || typeof t.id !== "string" || !L0_SAFE_ID_RE.test(t.id)) return true;
   if (L0_BLOCKED_TYPES.has(t.type)) return true;
+  if (t.needsConfirm) return true; // バックアップ由来で、PCでの初回確認がまだのボタンは、スマホからは押せない
   if (t.type === "multi" && Array.isArray(t.subActions)) {
     return t.subActions.some((s) => s && L0_BLOCKED_TYPES.has(s.type));
   }
@@ -99,12 +102,13 @@ function l0RouteText(r) {
 const L0_REASONS = {
   "user-pc": "PCで切断しました",
   "user-phone": "スマホから切断されました",
-  timeout: "通信が途切れたため切断しました",
-  idle: "しばらく操作がなかったため切断しました",
+  timeout: "通信が30分途切れたため切断しました",
+  idle: "60分間操作がなかったため切断しました",
   maxtime: "最大の接続時間に達したため切断しました",
-  "phone-hidden": "スマホの画面が長時間閉じていたため切断しました",
-  "pc-sleep": "PCがスリープしたため切断しました",
-  "pc-lock": "PCの画面がロックされたため切断しました",
+  "phone-hidden": "スマホの画面が30分間裏に回っていたため切断しました",
+  "pc-sleep": "PCのスリープ・休止が30分を超えたため切断しました",
+  "pc-lock": "PCの画面ロックが30分を超えたため切断しました",
+  "pass-fails": "Launch-passを3回続けて間違えたため切断しました",
   network: "ネットワークが変わったため切断しました",
   closed: "Launch-0を閉じました",
   "wait-timeout": "",
@@ -140,7 +144,7 @@ function l0ThemeFor(pt) {
 async function l0IconFor(t, icons, images) {
   const ic = t.icon || {};
   // 「オン/オフ」の状態を持つボタンが、スマホで使う状態の名前：マイク／スピーカー／サウンドはボタンごと（"snd:" + ID）
-  const toggle = tileHasToggle(t) ? (t.type === "mic" ? "mic" : "speaker") : (t.type === "sound" ? "snd:" + String(t.id) : null);
+  const toggle = tileHasToggle(t) ? (isMicTile(t) ? "mic:" + String(t.id) : "speaker") : (t.type === "sound" ? "snd:" + String(t.id) : null);
   if (ic.kind === "image" && ic.value) {
     let data = "";
     try {
@@ -148,33 +152,52 @@ async function l0IconFor(t, icons, images) {
     } catch (e) { data = ""; }
     if (data && /^data:image\/(png|jpeg|gif|webp);base64,/.test(data) && data.length < 700000) {
       images[t.id] = data;
-      return { kind: "image", img: true, toggle: null };
+      // マイク・スピーカーのミュート（オフ）用に選んだ画像があれば、それも渡す（無ければ、スマホ側で赤い斜線を重ねる）
+      let offImg = false;
+      if (toggle && !String(toggle).startsWith("snd:") && ic.offValue) {
+        let od = "";
+        try { od = String(ic.offValue).startsWith("data:image/") ? String(ic.offValue) : await window.api.l0IconData(t.id, true); } catch (e) { od = ""; }
+        if (od && /^data:image\/(png|jpeg|gif|webp);base64,/.test(od) && od.length < 700000) { images[t.id + "_off"] = od; offImg = true; }
+      }
+      return { kind: "image", img: true, toggle, offImg };
     }
     // 読めなかった画像は、そのボタンの種類に合った標準のアイコンで代用する
   }
-  if (ic.kind === "emoji" && ic.value) return { kind: "emoji", emoji: Array.from(String(ic.value)).slice(0, 8).join(""), toggle };
+  if (ic.kind === "emoji" && ic.value) {
+    const offEmoji = toggle && !String(toggle).startsWith("snd:") && ic.offValue ? Array.from(String(ic.offValue)).slice(0, 8).join("") : "";
+    return { kind: "emoji", emoji: Array.from(String(ic.value)).slice(0, 8).join(""), offEmoji, toggle };
+  }
   const key = CSS_ICONS[resolveCssIconKey(t)] ? resolveCssIconKey(t) : "circleMark";
   const def = CSS_ICONS[key];
   // サウンドは、止まっているとき用の斜線入りの図柄を、オフ用の図柄を持たないアイコンにも自動で用意する
   icons[key] = { svg: def.svg, offSvg: def.offSvg || (t.type === "sound" ? svgWithSlash(def.svg) : "") };
   let offKey = null;
   if (ic.kind === "css" && toggle && ic.offValue && CSS_ICONS[ic.offValue]) {
-    offKey = ic.offValue;
-    icons[offKey] = { svg: CSS_ICONS[offKey].svg, offSvg: CSS_ICONS[offKey].offSvg || "" };
+    const od = CSS_ICONS[ic.offValue];
+    // オフ用の図柄は、オン用と同じアイコンを選んでいても混ざらないよう、別の名前（"off:"付き）で渡す。オン/オフ対応のアイコンは、斜線入りの図柄を渡す
+    offKey = "off:" + ic.offValue;
+    icons[offKey] = { svg: od.toggle && od.offSvg ? od.offSvg : od.svg, offSvg: "" };
   }
   const color = safeColor(t.color);
+  const oc = offColorFor(t); // オフ（ミュート中）用に選んだ色（無ければ null＝今までどおりの赤）
   return {
     kind: "css", key, offKey, toggle,
     filled: ic.kind === "css" && !!ic.filled,
     fgFilled: luminance(color) < 0.5 ? "#FFFFFF" : "#14161B",
+    offColor: oc || "",
+    offFgFilled: oc ? (luminance(oc) < 0.5 ? "#FFFFFF" : "#14161B") : "",
   };
 }
 
 // スマホに渡す「いまの状態」：スピーカー・マイクのミュートと、サウンドボタンごとの「止まっているか」（true=オフ＝止まっている）
+function l0MicWire(st) { return (st === "muted" || st === "open" || st === "partial" || st === "unknown" || st === "none" || st === "unselected") ? st : false; }
 function l0States() {
-  const s = { speaker: audioMuteState.speaker, mic: audioMuteState.mic };
+  const s = { speaker: audioMuteState.speaker, timer: !!timerOpen }; // timer：PCでタイマー画面が開いているか（開いている間、スマホのタイマーのボタンも暗くする）
   for (const t of tiles) {
     if (t && t.type === "sound" && L0_SAFE_ID_RE.test(String(t.id))) s["snd:" + String(t.id)] = !isSoundPlaying(t);
+    // マイクはボタンごと。スマホに「ミュート中」と見せるのは、確認できたときだけ。
+    // 文字で渡す：muted（全部ミュート）／open（開いている）／partial（一部だけ開いている）／unknown（確認できない）／none（未接続）／unselected（マイク未選択）。まだ読んでいないときなどは false。
+    if (isMicTile(t) && L0_SAFE_ID_RE.test(String(t.id))) s["mic:" + String(t.id)] = l0MicWire(micState(t));
   }
   return s;
 }
@@ -191,7 +214,7 @@ async function l0BuildSnapshot(startPage) {
       const blocked = l0IsBlocked(t);
       const icon = L0_SAFE_ID_RE.test(String(t.id)) ? await l0IconFor(t, icons, images) : { kind: "css", key: "circleMark", toggle: null };
       if (!icons.circleMark && icon.key === "circleMark" && CSS_ICONS.circleMark) icons.circleMark = { svg: CSS_ICONS.circleMark.svg, offSvg: "" };
-      list.push({ id: String(t.id), name: String(t.name || "").slice(0, 60), blocked, color: safeColor(t.color), icon, multi: t.type === "multi" });
+      list.push({ id: String(t.id), name: String(t.name || "").slice(0, 60), blocked, color: safeColor(t.color), icon, multi: t.type === "multi", timer: tileOpensTimer(t) });
       if (!blocked) { allowedIds.push(String(t.id)); if (t.type === "multi") multiIds.push(String(t.id)); }
     }
     pages.push({ index: p.index, label: "画面" + (p.index + 1), theme: l0ThemeFor(pt), tiles: list });
@@ -204,6 +227,8 @@ async function l0BuildSnapshot(startPage) {
 }
 
 // ---------- スマホからの操作を実行（PCでの左クリックと同じ処理を呼ぶ） ----------
+// 操作が実行されなかった・失敗したことを、実行中のスマホの操作に伝える（成功扱いにして、履歴に数えないため）
+function l0NoteFailure() { l0.failTick = (l0.failTick | 0) + 1; }
 async function l0RunTap(e) {
   const tile = tiles.find((t) => t.id === e.tileId);
   if (!tile || !l0.allowed.has(tile.id) || l0IsBlocked(tile)) {
@@ -213,9 +238,11 @@ async function l0RunTap(e) {
   const sink = [];
   l0ToastSink = sink;
   let ok = true;
+  const failBefore = l0.failTick | 0;
   // マルチ操作・画面分割は「いま前面にあるウィンドウ」に作用する。実行の間だけLaunch-0を前面から外す（main.js側で最小化）
   const needsFront = tile.type === "multi" || tile.type === "window";
   l0.exec += 1; l0UpdateLive();
+  l0.tapRunning = (l0.tapRunning | 0) + 1; // この間に実行されるマイクの操作は「スマホから」として扱う（解除の許可の確認に使う。複数同時でも、全部終わるまで有効）
   try {
     if (needsFront) { try { await window.api.l0ExecMode(true); } catch (err) { /* 続行 */ } }
     await handleTileClick(tile);
@@ -225,11 +252,13 @@ async function l0RunTap(e) {
   } finally {
     if (needsFront) { try { await window.api.l0ExecMode(false); } catch (err) { /* 無視 */ } }
     l0.exec = Math.max(0, l0.exec - 1);
+    l0.tapRunning = Math.max(0, (l0.tapRunning | 0) - 1);
   }
   l0ToastSink = null;
   // 「ほかのマルチ操作の実行中です」などで実行されなかったときは、成功扱いにしない
   const last = sink.length ? sink[sink.length - 1] : "";
   if (/実行中/.test(last)) ok = false;
+  if ((l0.failTick | 0) !== failBefore) ok = false; // マイクの操作の失敗・解除の拒否など
   const now = new Date();
   const hh = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0") + ":" + String(now.getSeconds()).padStart(2, "0");
   if (ok) {
@@ -267,10 +296,11 @@ function l0ModePanelHtml() {
   }
   let fw = "";
   if (l0.fw && l0.fw.supported) {
-    fw = l0.fw.exists
+    const fixing = !!(l0.fw.exists && !l0.fw.pathOk); // 規則はあるが、いまのLaunch-Kの場所を指していない
+    fw = l0.fw.exists && !fixing
       ? `<div class="l0-sub">✅ Windowsファイアウォール：許可済み</div>`
-      : `<div class="l0-notice">⚠ Windowsファイアウォールの許可がありません。スマホから届かない場合は追加してください（Tailscaleの番号帯からだけ許可します）。</div>
-         <div class="l0-row"><button class="btn default" id="l0FwAdd"${l0.fw.adding ? " disabled" : ""}>${l0.fw.adding ? "追加しています…" : "許可を追加（管理者の確認が出ます）"}</button></div>`;
+      : `<div class="l0-notice">⚠ ${fixing ? "Windowsファイアウォールの許可が、いまのLaunch-Kの場所と合っていません（再インストールなどで場所が変わると、スマホから届きません）。" : "Windowsファイアウォールの許可がありません。スマホから届かない場合は追加してください（Tailscaleの番号帯からだけ許可します）。"}</div>
+         <div class="l0-row"><button class="btn default" id="l0FwAdd"${l0.fw.adding ? " disabled" : ""}>${l0.fw.adding ? (fixing ? "修正しています…" : "追加しています…") : (fixing ? "許可を修正（管理者の確認が出ます）" : "許可を追加（管理者の確認が出ます）")}</button></div>`;
   }
   return `<div class="l0-ok-note">✅ Tailscale：使えます（暗号化・同じアカウントの端末だけ接続できます）</div>
     <div class="l0-sub">ac：${l0Acct(ts.login || ts.display || "")}　このPC：<b>${escapeHtml(ts.selfName || "")}</b></div>
@@ -278,13 +308,86 @@ function l0ModePanelHtml() {
     ${fw}
     <div class="l0-row"><button class="btn default" id="l0TsRecheck">再確認</button></div>`;
 }
+// Launch-pass（4桁）：未設定ならスマホ接続を始められない。忘れたら、接続の前に、ここで決め直せる。
+function l0PassPanelHtml() {
+  const p = l0.pass;
+  if (!p) return `<div class="l0-sub">Launch-passを確認しています…</div>`;
+  const msg = l0.passMsg ? `<div class="l0-notice">${escapeHtml(l0.passMsg)}</div>` : "";
+  if (!p.set || l0.passEditing) {
+    return `<div class="l0-card">
+      <div class="l0-sub" style="margin-bottom:4px;"><b>Launch-pass</b>　4桁の数字を決めてください。延長中の操作と再接続に使います。</div>
+      <div class="l0-row" style="align-items:center;margin-bottom:0;">
+        <input type="text" id="l0PassInput" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="0000" style="width:84px;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel-alt-solid);color:var(--text);font-size:15px;letter-spacing:4px;text-align:center;" />
+        <button class="btn primary" id="l0PassSave">決定</button>${p.set ? '<button class="btn default" id="l0PassCancel">やめる</button>' : ""}
+      </div>${msg}</div>`;
+  }
+  return `<div class="l0-ok-note">✅ Launch-pass：設定済み <button class="btn default" id="l0PassChange" style="margin-left:6px;padding:2px 10px;font-size:11px;">変更</button></div>${msg}`;
+}
+async function l0SavePass() {
+  const el = document.getElementById("l0PassInput");
+  const v = el ? String(el.value || "").trim() : "";
+  if (!/^[0-9]{4}$/.test(v)) { l0.passMsg = "4桁の数字で入力してください。"; l0Render(); const e2 = document.getElementById("l0PassInput"); if (e2) e2.focus(); return; }
+  let r = null;
+  try { r = await window.api.l0SetPass(v); } catch (e) { r = null; }
+  if (r && r.ok) { l0.pass = { set: true }; l0.passEditing = false; l0.passMsg = ""; }
+  else l0.passMsg = r && r.error === "running" ? "接続の準備中・接続中は変えられません。" : "保存できませんでした。もう一度お試しください。";
+  l0Render();
+}
+async function l0LoadPass() {
+  try { l0.pass = (await window.api.l0PassStatus()) || { set: false }; } catch (e) { l0.pass = { set: false }; }
+  if (l0.phase === "select") l0Render();
+}
+// 「2分05秒」のような表示（途切れている時間・切断までの残り時間）
+function l0FmtDur(ms) {
+  const s = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  const m = Math.floor(s / 60), r = s % 60;
+  return m > 0 ? m + "分" + String(r).padStart(2, "0") + "秒" : r + "秒";
+}
+// 通信の途切れ・画面が裏に回っている状態が続いたとき、切断までの残り（ミリ秒）。どちらも無ければ null
+function l0DropLeftMs() {
+  const ds = [];
+  if (l0.stalled && l0.stalledInfo && l0.stalledInfo.dropAt) ds.push(l0.stalledInfo.dropAt);
+  if (l0.hiddenInfo && l0.hiddenInfo.dropAt) ds.push(l0.hiddenInfo.dropAt);
+  return ds.length ? Math.min.apply(null, ds) - Date.now() : null;
+}
 function l0StatusText() {
-  if (l0.stalled) return "通信が途切れています…";
+  // 状態は短く。残り時間（あと◯分で切断）は、「注意」の帯だけに出す。
+  if (l0.away) return l0.away.kind === "lock" ? "PCの画面がロックされています" : "PCがスリープ・休止中です";
+  if (l0.locked) return "スマホはLaunch-passの入力待ちです";
+  if (l0.stalled || l0.hiddenInfo) {
+    // 「経過」は、応答がなくなってからの時間（画面が裏に回り始めた時刻と、通信が途切れ始めた時刻の、早いほうから数える）
+    const starts = [];
+    if (l0.stalled && l0.stalledInfo) starts.push(l0.stalledInfo.since);
+    if (l0.hiddenInfo) starts.push(l0.hiddenInfo.since);
+    const dur = starts.length ? "（経過 " + l0FmtDur(Date.now() - Math.min.apply(null, starts)) + "）" : "";
+    const label = l0.hiddenInfo ? (l0.stalled ? "スマホから応答がありません" : "スマホの画面が裏に回っています") : "通信が途切れています";
+    return label + dur;
+  }
   if (l0.paused) return "一時停止中";
   if (l0.execBusy || l0.exec > 0) return "動作を実行中…";
   return "接続中";
 }
-function l0DotClass() { return l0.stalled ? " stalled" : l0.paused ? " paused" : ""; }
+function l0DotClass() { return (l0.stalled || l0.hiddenInfo || l0.away || l0.locked) ? " stalled" : l0.paused ? " paused" : ""; }
+// 「注意」の表示（黄色の帯）：途切れ・裏に回っている／無操作。残り時間は1秒ごとに書き換える（id: l0CautionLeft）
+function l0CautionHtml() {
+  const c = l0.caution, ic = l0.idleCaution;
+  if (c) {
+    const what = c.kind === "hidden" ? "スマホの画面が裏に回ったままです。" : "通信が途切れています。";
+    return `<div class="l0-warn" style="background:#FFB238;">⚠ 注意：${what}あと <b id="l0CautionLeft">--:--</b> で自動的に切断します。<span id="l0CautionNote"></span></div>`;
+  }
+  if (ic) {
+    const txt = ic.phase === "pass"
+      ? `しばらく操作がありません。あと <b id="l0CautionLeft">--:--</b> でスマホのボタンが使えなくなり、Launch-passが必要になります。`
+      : `スマホはLaunch-passの入力待ちです。あと <b id="l0CautionLeft">--:--</b> で自動的に切断します。`;
+    return `<div class="l0-warn" style="background:#FFB238;">⚠ 注意：${txt} <button class="btn primary" id="l0Extend">このまま続ける</button></div>`;
+  }
+  return "";
+}
+function l0CautionLeftMs() {
+  if (l0.caution) return l0.caution.dropAt - Date.now();
+  if (l0.idleCaution) return l0.idleCaution.at - Date.now();
+  return 0;
+}
 
 // アカウント名（メールアドレスなど）は、最初は伏せ字にして、押すたびに表示・非表示を切り替える。
 // 伏せ字（●●●●●●●●）または名前と、顔が、
@@ -306,9 +409,10 @@ function l0Render() {
   if (l0.phase === "select") {
     const pages = l0PagesWithTiles();
     if (l0.startPage === null || !pages.some((p) => p.index === l0.startPage)) l0.startPage = pages.length ? pages[0].index : null;
-    const canStart = pages.length && !l0.busy && !!(l0.ts && l0.ts.ok);
+    const canStart = pages.length && !l0.busy && !!(l0.ts && l0.ts.ok) && !!(l0.pass && l0.pass.set) && !l0.passEditing;
     body = `
       ${l0ModePanelHtml()}
+      ${l0PassPanelHtml()}
       <div class="l0-sub" style="margin-top:6px;">スマホで最初に表示する画面を選んでください。</div>
       <div class="l0-list">${pages.map((p) => `<button class="l0-pick${p.index === l0.startPage ? " sel" : ""}" data-page="${p.index}">画面${p.index + 1}<span>ボタン ${p.count}個</span></button>`).join("") || '<div class="l0-sub">ボタンがある画面がありません</div>'}</div>
       ${notice}
@@ -370,9 +474,10 @@ function l0Render() {
     const routeCell = l0RouteText(l0.route);
     const cannotDisc = l0.execBusy || l0.exec > 0 || l0.closingWait;
     body = `
-      <div class="l0-status"><span class="l0-dot${l0DotClass()}" id="l0Dot"></span><b id="l0StatusText">${escapeHtml(l0StatusText())}</b>
-        <span class="l0-sub" style="margin-left:8px;">${whoHtml}</span></div>
-      ${warn}${closing}
+      <div class="l0-status"><span class="l0-dot${l0DotClass()}" id="l0Dot"></span>
+        <div class="l0-status-main"><b id="l0StatusText">${escapeHtml(l0StatusText())}</b>
+          <div class="l0-who">${whoHtml}</div></div></div>
+      ${warn}${l0CautionHtml()}${closing}
       <div class="l0-grid">
         <div><span>接続時間</span><b id="l0Elapsed">00:00</b></div>
         <div><span>操作回数</span><b id="l0Count">${l0.count}</b></div>
@@ -408,6 +513,14 @@ function l0Bind() {
   on("l0TsRecheck", () => l0LoadTs());
   on("l0TsDownload", () => { try { window.api.openExternal("https://tailscale.com/download"); } catch (e) { /* 無視 */ } });
   on("l0FwAdd", l0FwAdd);
+  on("l0PassSave", l0SavePass);
+  on("l0PassChange", () => { l0.passEditing = true; l0.passMsg = ""; l0Render(); const el = document.getElementById("l0PassInput"); if (el) el.focus(); });
+  on("l0PassCancel", () => { l0.passEditing = false; l0.passMsg = ""; l0Render(); });
+  const passEl = document.getElementById("l0PassInput");
+  if (passEl) {
+    passEl.addEventListener("input", () => { passEl.value = passEl.value.replace(/[^0-9]/g, "").slice(0, 4); });
+    passEl.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); ev.stopPropagation(); l0SavePass(); } });
+  }
   on("l0Back", async () => { await window.api.l0Stop(); l0.phase = "select"; l0.creds = null; l0.notice = ""; l0Render(); });
   on("l0Allow", () => window.api.l0Approve(true));
   on("l0Deny", () => window.api.l0Approve(false));
@@ -435,6 +548,12 @@ function l0UpdateLive() {
     set("l0PhonePage", l0.phonePage === null ? "-" : "画面" + (l0.phonePage + 1));
     set("l0Last", l0.last ? "画面" + l0.last.page + "「" + l0.last.name + "」 " + l0.last.at : "まだありません");
     set("l0StatusText", l0StatusText());
+    if (l0.caution || l0.idleCaution) set("l0CautionLeft", l0Fmt(l0CautionLeftMs()));
+    if (l0.caution) {
+      // 応答がなくなってから15分を超えると、戻ったときにLaunch-passが必要になる
+      const gone = Date.now() - (l0.caution.dropAt - 30 * 60 * 1000);
+      set("l0CautionNote", gone >= 15 * 60 * 1000 ? "（戻ったときに、Launch-passが必要です）" : "（15分を超えると、戻ったときにLaunch-passが必要です）");
+    }
     const dot = document.getElementById("l0Dot");
     if (dot) dot.className = "l0-dot" + l0DotClass();
     set("l0Route", "🔒 Tailscale　" + l0RouteText(l0.route));
@@ -461,11 +580,14 @@ async function l0FwAdd() {
   l0Render();
   let r = null;
   try { r = await window.api.l0FwAdd(); } catch (e) { r = null; }
-  l0.fw = Object.assign({}, l0.fw || { supported: true }, { adding: false, exists: !!(r && r.ok) });
+  const prevFw = l0.fw || { supported: true };
+  // 成功したら「ある・場所も合っている」。失敗（管理者の確認で「いいえ」など）のときは、直前の状態（規則があるか）を変えない
+  l0.fw = Object.assign({}, prevFw, { adding: false, exists: r && r.ok ? true : !!prevFw.exists, pathOk: !!(r && r.ok) });
   l0.notice = r && r.ok ? "" : "ファイアウォールの許可を追加できませんでした（管理者の確認で「いいえ」を選ぶと追加されません）。";
   l0Render();
 }
 const L0_START_ERRORS = {
+  "no-pass": "先にLaunch-pass（4桁の数字）を決めてください。",
   "tailscale-unavailable": "Tailscaleの機能を使えませんでした。",
   "ts-not-installed": "Tailscaleが入っていません。",
   "ts-stopped": "Tailscaleが停止しています。Tailscaleをオンにしてからやり直してください。",
@@ -545,7 +667,7 @@ function l0OnEvent(e) {
       break;
     case "connected":
       l0.phase = "active"; l0.since = e.since || Date.now(); l0.count = 0; l0.last = null; l0.log = [];
-      l0.paused = false; l0.stalled = false; l0.phonePage = l0.startPage; l0.warn = null; l0.notice = "";
+      l0.paused = false; l0.stalled = false; l0.stalledInfo = null; l0.hiddenInfo = null; l0.phonePage = l0.startPage; l0.warn = null; l0.notice = ""; l0.caution = null; l0.idleCaution = null; l0.locked = null; l0.away = null;
       l0.sessionMode = e.mode || l0.sessionMode; l0.peer = e.peer || l0.peer; l0.route = e.route || (l0.peer && l0.peer.path) || null;
       l0.execBusy = false; l0.closingWait = false;
       l0StartMutePush();
@@ -558,9 +680,19 @@ function l0OnEvent(e) {
       if (l0.phase === "active") l0Render();
       break;
     case "closing-wait": l0.closingWait = true; l0Render(); break;
-    case "stalled": l0.stalled = true; if (l0.phase === "active") l0Render(); break;
-    case "resumed": l0.stalled = false; if (l0.phase === "active") l0Render(); break;
+    case "stalled": l0.stalled = true; l0.stalledInfo = { since: Number(e.since) || Date.now(), dropAt: Number(e.dropAt) || 0 }; if (l0.phase === "active") l0Render(); break;
+    case "resumed": l0.stalled = false; l0.stalledInfo = null; if (l0.phase === "active") l0Render(); break;
+    case "hidden": l0.hiddenInfo = { since: Number(e.since) || Date.now(), dropAt: Number(e.dropAt) || 0 }; if (l0.phase === "active") l0Render(); break;
+    case "hidden-end": l0.hiddenInfo = null; if (l0.phase === "active") l0Render(); break;
     case "phone-page": l0.phonePage = e.page; l0UpdateLive(); break;
+    case "caution": l0.caution = { kind: e.kind, dropAt: Number(e.dropAt) || 0 }; if (l0.phase === "active") l0Render(); break;
+    case "idle-caution": l0.idleCaution = { phase: e.phase, at: Number(e.at) || 0 }; if (l0.phase === "active") l0Render(); break;
+    case "caution-end": l0.caution = null; l0.idleCaution = null; if (l0.phase === "active") l0Render(); break;
+    case "locked": l0.locked = { why: e.why || "" }; if (l0.phase === "active") l0Render(); break;
+    case "unlocked": l0.locked = null; l0.notice = ""; if (l0.phase === "active") l0Render(); break;
+    case "pass-fail": l0.notice = "スマホで、Launch-passの入力が違いました（" + e.count + "/" + e.max + "回）。"; if (l0.phase === "active") l0Render(); break;
+    case "pcaway": l0.away = { kind: e.kind, since: Number(e.since) || Date.now(), dropAt: Number(e.dropAt) || 0 }; if (l0.phase === "active") l0Render(); break;
+    case "pcback": l0.away = null; if (e.locked) l0.locked = l0.locked || { why: "pc" }; if (l0.phase === "active") l0Render(); break;
     case "warn": l0.warn = { kind: e.kind }; if (l0.phase === "active") l0Render(); break;
     case "extended": l0.warn = null; if (l0.phase === "active") l0Render(); break;
     case "tap": l0RunTap(e); break;
@@ -617,10 +749,13 @@ async function initLaunch0() {
   l0Locked = !!(init && init.locked);
   l0UpdateLockBtn();
   window.api.onRemoteEvent(l0OnEvent);
+  // マイクの接続・ミュートが変わったら、2秒ごとの定期更新を待たずに、すぐスマホへ反映する
+  window.api.onMicChanged(() => { l0RefreshMute().then(l0PushState); });
   l0.tickTimer = setInterval(l0UpdateLive, 1000);
   l0InstallEnterKey();
   l0Render();
   l0LoadTs();
+  l0LoadPass();
 }
 
 // ---------- Launch-0を開く（ハンバーガーメニューから）。確認の画面は挟まず、すぐ開く ----------
@@ -649,6 +784,7 @@ function l0InstallEnterKey() {
       return;
     }
     if (l0.phase !== "select" || l0.busy) return;
+    if (document.activeElement && document.activeElement.id === "l0PassInput") return; // Launch-passの入力中のEnterは、決定（QR表示ではない）
     const btn = document.getElementById("l0QrBtn");
     if (!btn || btn.disabled) return;                                // Tailscaleが使えない・ボタンがない画面では何もしない
     e.preventDefault(); e.stopPropagation();                         // 「やめる」などにフォーカスがあっても、そのボタンは押さない

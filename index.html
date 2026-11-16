@@ -238,6 +238,10 @@
     /* グリフの色がテーマ色に近くても読み取れるよう、常に軽い縁取りを付ける。 */
     text-shadow: 0 1px 1px rgba(0,0,0,0.3), 0 0 6px rgba(0,0,0,0.12);
   }
+  /* マイク・スピーカーのミュート（オフ）：画像・絵文字には赤い斜線を重ねる（マイクが接続されていないときの「全体を暗く」とは別の見た目） */
+  .tile.timer-busy { opacity: 0.6; } /* タイマー画面が開いている間は、タイマーを開くボタンを少し暗くする（押せるが、「すでに開いています」と表示する） */
+  .icon-slash { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
+  .icon-slash::after { content: ""; position: absolute; left: 14%; right: 14%; top: 50%; height: 0; border-top: max(3px, 7%) solid #FF3B30; transform: rotate(-45deg); border-radius: 4px; box-shadow: 0 0 0 1px rgba(255,255,255,0.55); pointer-events: none; }
   .tile-icon-emoji {
     display: flex; align-items: center; justify-content: center;
     width: 100%; height: 100%;
@@ -295,6 +299,8 @@
     display: none; align-items: center; justify-content: center; z-index: 50; padding: 16px;
   }
   .overlay.show { display: flex; }
+  /* ボタンの追加・編集の画面は、上に固定する（真ん中に置くと、中身の高さが変わるたびに、画面全体が上下にずれるため） */
+  #overlay.edit-top { align-items: flex-start; padding-top: max(16px, 6vh); }
   /* 確認・編集用のモーダル（#overlay）は、設定パネル（ハンバーガーメニュー）を
      閉じなくても常に手前に表示されるよう、重なり順を一段高くしておく。
      例：設定パネルを開いたまま「すべて初期化する」を押しても、確認画面がすぐ見える。 */
@@ -510,7 +516,12 @@
   .l0-otp { font-family: ui-monospace, Consolas, monospace; font-size: 20px; font-weight: 400; letter-spacing: 4px; color: var(--text-muted); margin: 2px 0 6px 0; user-select: all; }
   .l0-card { border: 1px solid var(--border); background: var(--panel-alt-solid); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
   .l0-big { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
-  .l0-status { display: flex; align-items: center; margin-bottom: 10px; font-size: 14px; }
+  .l0-status { display: flex; align-items: flex-start; margin-bottom: 10px; }
+  .l0-status .l0-dot { margin-top: 5px; flex: none; }
+  .l0-status-main { min-width: 0; }
+  .l0-status-main > b { display: block; font-size: 12.5px; line-height: 1.5; }
+  .l0-who { margin-top: 3px; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .l0-who .l0-acct { white-space: nowrap; }
   .l0-dot { width: 10px; height: 10px; border-radius: 50%; background: #3ED67A; margin-right: 8px; }
   .l0-dot.paused { background: #FFDE59; }   /* 一時停止中：黄色 */
   .l0-dot.stalled { background: #FF9F43; }  /* 通信が途切れている：橙（黄色と区別） */
@@ -572,6 +583,7 @@
 
   <script src="vendor/qrcode.js"></script>
   <script src="vendor/qrcode_UTF8.js"></script>
+  <script src="mic-core.js"></script>
   <script src="launch0.js"></script>
   <script src="renderer.js"></script>
 </body>

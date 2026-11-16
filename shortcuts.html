@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
-<title>ショートカットの管理</title>
+<title>ショートカットの一覧</title>
 <style>
   :root {
     --bg: #17181c;
@@ -38,6 +38,7 @@
     background: var(--panel-alt); color: var(--text-muted); font-size: 13px;
     display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
   }
+  .icon-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
   .icon-btn:hover { color: var(--text); }
   .toolbar {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -88,8 +89,9 @@
 <body>
 <div class="frame">
   <div class="title-bar">
-    <div class="label">ショートカットの管理</div>
+    <div class="label">ショートカットの一覧</div>
     <div class="btns">
+      <button class="icon-btn" id="lockBtn" type="button" title="常に最前面に表示">🔓</button>
       <button class="icon-btn" id="refreshBtn" type="button" title="最新の状態に更新">↻</button>
       <button class="icon-btn" id="closeBtn" type="button" title="閉じる">✕</button>
     </div>
@@ -119,7 +121,19 @@
     if (text !== undefined && text !== null) e.textContent = text;
     return e;
   }
-  function norm(c) { return String(c || "").toLowerCase(); }
+  // 比較用の形：大文字小文字・修飾キーの並び順・別名（Ctrl/Control など）の違いを同じものとして扱う（renderer.js の hotkeyNorm と同じ規則）
+  function norm(c) {
+    var parts = String(c || "").split("+").map(function (x) { return x.trim().toLowerCase(); }).filter(Boolean);
+    var mods = {}, key = "";
+    parts.forEach(function (p) {
+      if (p === "ctrl" || p === "control" || p === "commandorcontrol" || p === "cmdorctrl") mods.control = true;
+      else if (p === "alt" || p === "option") mods.alt = true;
+      else if (p === "shift") mods.shift = true;
+      else if (p === "meta" || p === "super" || p === "win" || p === "windows" || p === "cmd" || p === "command") mods.meta = true;
+      else key = p;
+    });
+    return ["control", "alt", "shift", "meta"].filter(function (m) { return mods[m]; }).concat([key]).join("+");
+  }
   function formatKey(hotkey) { return String(hotkey || "").replace(/Control/g, "Ctrl"); }
   function lastKeyChar(hotkey) {
     var parts = String(hotkey || "").split("+");
@@ -143,29 +157,21 @@
     return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
   }
 
-  // ボタン1つが持つショートカット（起動用・キー送信）を取り出す（renderer.jsのhotkeyUsesOfTileと同じ考え方）
+  // Launch-0を開くキー（予約。ボタンには登録できない。両方の一覧のいちばん上に、いつも表示する）
+  var LAUNCH0_COMBO = "Control+Alt+Shift+K";
+  // ボタン1つが持つショートカット（起動用）を取り出す（renderer.jsのhotkeyUsesOfTileと同じ考え方）
   function usesOfTile(tile) {
     var uses = [];
     if (!tile || typeof tile !== "object") return uses;
     if (tile.hotkey) uses.push({ kind: "launch", combo: tile.hotkey, label: "起動用" });
-    if (tile.type === "discord" && tile.sendHotkey) uses.push({ kind: "send", combo: tile.sendHotkey, label: "キー送信" });
-    if (tile.type === "multi" && Array.isArray(tile.subActions)) {
-      tile.subActions.forEach(function (s, i) {
-        if (s && s.type === "discord" && s.sendHotkey) {
-          uses.push({ kind: "send", combo: s.sendHotkey, label: "マルチ操作" + (i + 1) + "番目のキー送信" });
-        }
-      });
-    }
     return uses;
   }
 
   // 実際にOSへ登録される起動用ショートカットかどうか（renderer.jsのsyncHotkeysと同じ判定）。
-  // 送信用と同じキー、または先に登録済みの起動用と同じキーの起動用は、無効になる。
+  // 先に登録済みの起動用と同じキー、またはLaunch-0を開くキーと同じ起動用は、無効になる。
   function markDisabled(tiles) {
     var sendSet = {};
-    tiles.forEach(function (t) {
-      usesOfTile(t).forEach(function (u) { if (u.kind === "send") sendSet[norm(u.combo)] = true; });
-    });
+    sendSet[norm(LAUNCH0_COMBO)] = true;
     var seen = {};
     tiles.forEach(function (t) {
       if (!t || typeof t !== "object" || !t.hotkey) return;
@@ -183,7 +189,31 @@
     return d;
   }
 
+  // いちばん上の「Launch-0を開く」の行（画面順・キー順の両方）
+  function launch0Row(isKeyView) {
+    var sec = el("div", "section");
+    if (isKeyView) {
+      sec.appendChild(el("div", "keyhead", formatKey(LAUNCH0_COMBO)));
+      var r = el("div", "row");
+      r.appendChild(el("div", "where", "Launch-0（スマホ操作）を開く"));
+      r.appendChild(el("span", "badge launch", "起動用"));
+      sec.appendChild(r);
+    } else {
+      var h = el("h3", null, "Launch-0");
+      h.appendChild(el("span", "count", "このキーは変更できません・ほかのボタンには設定できません"));
+      sec.appendChild(h);
+      var row = el("div", "row");
+      row.appendChild(el("div", "name", "Launch-0（スマホ操作）を開く"));
+      var keys = el("div", "keys");
+      keys.appendChild(useRow({ kind: "launch", combo: LAUNCH0_COMBO, label: "起動用" }, false));
+      row.appendChild(keys);
+      sec.appendChild(row);
+    }
+    return sec;
+  }
+
   function renderScreenView() {
+    contentEl.appendChild(launch0Row(false));
     var tiles = data.tiles;
     var maxPage = data.pageCount - 1;
     tiles.forEach(function (t) { if (t && typeof t === "object") maxPage = Math.max(maxPage, pageOf(t)); });
@@ -226,6 +256,7 @@
       });
     });
     order.sort(function (a, b) { return compareKeys(groups[a].combo, groups[b].combo); });
+    contentEl.appendChild(launch0Row(true));
     if (!order.length) {
       contentEl.appendChild(el("div", "empty", "登録されているショートカットはありません"));
       return;
@@ -234,9 +265,8 @@
       var g = groups[k];
       var sec = el("div", "section");
       sec.appendChild(el("div", "keyhead", formatKey(g.combo)));
-      // 起動用が含まれて2件以上なら重複（本来は設定できない状態）。送信用だけの複数は問題なし
-      var hasLaunch = g.items.some(function (it) { return it.use.kind === "launch"; });
-      var conflict = hasLaunch && g.items.length > 1;
+      // 2件以上なら重複（本来は設定できない状態）。Launch-0を開くキーと同じ場合も重複
+      var conflict = g.items.length > 1 || norm(g.combo) === norm(LAUNCH0_COMBO);
       g.items.forEach(function (it) {
         var row = el("div", "row");
         row.appendChild(el("div", "where", "画面" + (pageOf(it.tile) + 1) + "「" + (it.tile.name || "無題") + "」"));
@@ -251,17 +281,17 @@
   function render() {
     while (contentEl.firstChild) contentEl.removeChild(contentEl.firstChild);
     markDisabled(data.tiles);
-    var launch = 0, send = 0, disabled = 0;
+    var launch = 0, disabled = 0;
     data.tiles.forEach(function (t) {
-      usesOfTile(t).forEach(function (u) { if (u.kind === "launch") launch++; else send++; });
+      usesOfTile(t).forEach(function () { launch++; });
       if (t && t.__launchDisabled) disabled++;
     });
-    summaryEl.textContent = "起動用 " + launch + " 件" + (disabled ? "（うち重複で無効 " + disabled + " 件）" : "") + " / キー送信 " + send + " 件";
+    summaryEl.textContent = "起動用 " + launch + " 件" + (disabled ? "（うち重複で無効 " + disabled + " 件）" : "");
     document.getElementById("showAllWrap").style.display = mode === "screen" ? "" : "none";
     if (mode === "screen") renderScreenView();
     else renderKeyView();
     if (mode === "screen") {
-      contentEl.appendChild(el("div", "note", "起動用：どこからでもそのキーを押すとボタンが動くショートカット。キー送信：ボタンを押すと、Discordなど他のアプリへ送るキー。この画面は見るだけで、変更はボタンの編集画面で行います。"));
+      contentEl.appendChild(el("div", "note", "起動用：どこからでもそのキーを押すとボタンが動くショートカット。Ctrl+Shift+Alt+K は、Launch-0を開くキーです（起動用のひとつ。変更できず、ほかのボタンには設定できません。スマホ接続中は効きません）。この画面は見るだけで、変更はボタンの編集画面で行います。"));
     }
   }
 
@@ -291,6 +321,15 @@
   document.getElementById("tabKey").addEventListener("click", function () { setMode("key"); });
   showAllChk.addEventListener("change", render);
   document.getElementById("refreshBtn").addEventListener("click", load);
+  // 常に最前面（ロック）：ほかの画面と同じ。既定はオフ（🔓）、押すたびにオン/オフ
+  var lockBtn = document.getElementById("lockBtn");
+  var locked = false;
+  lockBtn.addEventListener("click", function () {
+    locked = !locked;
+    lockBtn.classList.toggle("active", locked);
+    lockBtn.textContent = locked ? "🔒" : "🔓";
+    if (window.shortcutsApi) window.shortcutsApi.setAlwaysOnTop(locked);
+  });
   document.getElementById("closeBtn").addEventListener("click", function () { if (window.shortcutsApi) window.shortcutsApi.close(); });
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && window.shortcutsApi) window.shortcutsApi.close();

@@ -5,4 +5,5 @@ contextBridge.exposeInMainWorld("timerApi", {
   setAlwaysOnTop: (val) => ipcRenderer.send("timer:setAlwaysOnTop", val),
   suspendAlwaysOnTop: () => ipcRenderer.invoke("timer:suspendAlwaysOnTop"),
   close: () => ipcRenderer.send("timer:close"),
+  minimize: () => ipcRenderer.send("timer:minimize"),
 });

@@ -7,6 +7,15 @@
 //
 // electron-updaterが読み込めない場合や、開発中（npm start）は何もしない（アプリ本体は止めない）。
 //
+// 【v1.2.6 での変更点】
+//  ・マイク：「マイク（すべてまとめて）」と「マイク（1台ずつ）」。内蔵マイクは「内蔵マイク」と表示（USB・Bluetoothと分かったものは内蔵にしない）。ミュートは必ず読み直して確認。マイクの処理は専用スレッド。トレイに「すべてのマイクのミュートを解除」。
+//  ・スマホ：マイクのオン/オフと、「!」（一部だけ開いている・確認できない）、未接続の薄い表示が反映される。☰の「接続の安全」は簡易表示（開閉は保存）、横画面は画面一覧が2列でスクロール可。
+//  ・スマホ：長押しは0.62秒で名前を表示、指を離して1.2秒後に消える。◀▶と☰は、見た目を変えず、当たり判定だけを上下に広げた。
+//  ・Launch-0：通信が120秒途切れる、またはスマホの画面が裏に回って120秒たつと、PCの画面に警告（途切れている時間と、切断までの残りを表示）。どちらも10分で切断。
+//  ・Launch-0：Tailscaleの確認は、約15秒まで待ってから切断。ファイアウォールの許可がいまの場所と合っていなければ「許可を修正」。
+//  ・「スリープ」ボタンが、休止状態になることがあった不具合を修正。CSSアイコン（ヘッドホン・イヤホン）のオン/オフ、オフ時の色の選択を追加。
+//  ・診断：node tools/mic-selftest.js --props（マイクの設定情報の表示）。詳しくは docs/変更内容_1.2.6.md。
+//
 // 【v1.2.5 での変更点】
 //  ・Launch-0：接続方法はTailscaleだけ（「同じWi-Fi」を廃止）。「Launch-0を開きますか？」の確認画面と、スマホの確認画面（「上記を理解しました」）をなくした。0 と K の同時押しで開く機能を廃止（メニューから開く）。
 //  ・Launch-0：QRとパスワードは45秒ごとに更新（待ち時間90秒）。パスワードは英小文字4文字＋数字2文字。接続の許可の待ち時間は20秒。許可の画面はEnterキーでも許可できる。接続準備の画面はEnterで「QRを表示」。
@@ -39,7 +48,7 @@
 //  ・インストーラーを呼んだのにアプリが終了しなかった場合（見張り番）は、アプリを作り直して
 //    「ウィンドウが無いのに裏で動いているだけ」の状態を避ける。
 // ============================================================
-const { app, dialog } = require("electron");
+const { app, dialog, BrowserWindow, screen } = require("electron");
 const fs = require("fs");
 const path = require("path");
 
@@ -58,13 +67,16 @@ const INSTALL_SILENT = false;
 const QUIT_WATCHDOG_MS = 15 * 1000;
 const LOG_MAX_BYTES = 256 * 1024;
 
-let ctx = { getParentWindow: () => null, prepareQuit: async () => {} };
+let ctx = { getParentWindow: () => null, prepareQuit: async () => {}, canShowProgressWindow: () => true };
 let state = "idle"; // idle | checking | downloading | downloaded
 let downloadedVersion = null;
 let restartPromptOpen = false;
 let restartPromptDismissed = false;
 let installing = false;
 let lastProgressLogged = -1;
+let pendingVersion = null;     // ダウンロード中の新しいバージョン（表示用）
+let progressWin = null;        // ダウンロードの進み具合を出す小さな窓（アプリの画面とは別。操作を邪魔しない）
+let updatedNotice = null;      // 更新が終わって最初の起動のときだけ入る { from, to }（takeUpdatedNotice で1回だけ渡す）
 
 // ---------- ログ（userData/update.log） ----------
 function getLogPath() {
@@ -256,9 +268,67 @@ async function checkNow(manual) {
   }
 }
 
+// ---------- ダウンロードのゲージ ----------
+// ダウンロード中：画面の右下に小さなゲージ（％）と、タスクバーのアイコンの進み具合を出す。
+// ダウンロードが終わる・失敗したら消す。インストール中の進み具合は、更新用インストーラー自身の画面が出す（アプリはその時点で終了している）。
+const PROGRESS_HTML = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>html,body{margin:0;height:100%;background:#1f2126;color:#f2f2f4;font-family:-apple-system,"Segoe UI","Hiragino Sans","Noto Sans JP",system-ui,sans-serif;overflow:hidden}
+.box{box-sizing:border-box;height:100%;border:1px solid #33353c;padding:12px 14px;display:flex;flex-direction:column;justify-content:center;gap:8px}
+.t{font-size:12px;font-weight:700}.s{font-size:11px;color:#9b9ea6}.bar{height:8px;border-radius:4px;background:#33353c;overflow:hidden}
+.fill{height:100%;width:0;background:#6c8bff;transition:width .25s}</style></head><body><div class="box"><div class="t" id="t">新しいバージョンをダウンロードしています…</div>
+<div class="bar"><div class="fill" id="f"></div></div><div class="s" id="s">0%</div></div>
+<script>function setP(p,v){p=Math.max(0,Math.min(100,Math.round(p)));document.getElementById('f').style.width=p+'%';document.getElementById('s').textContent=p+'%　ダウンロードが終わったら、再起動のご案内を表示します';
+if(v)document.getElementById('t').textContent='新しいバージョン（v'+String(v).replace(/[^0-9A-Za-z.\-]/g,'')+'）をダウンロードしています…';}</script></body></html>`;
+function showProgress(pct, version) {
+  try {
+    const parent = ctx.getParentWindow();
+    if (parent && !parent.isDestroyed()) parent.setProgressBar(Math.max(0, Math.min(1, pct / 100))); // タスクバーのアイコン
+  } catch (e) { /* 無視 */ }
+  try {
+    if (typeof ctx.canShowProgressWindow === "function" && !ctx.canShowProgressWindow()) return; // スマホ接続中などは、窓は出さない
+    if (!progressWin || progressWin.isDestroyed()) {
+      const wa = screen.getPrimaryDisplay().workArea;
+      const w = 340, h = 88;
+      progressWin = new BrowserWindow({
+        width: w, height: h, x: wa.x + wa.width - w - 16, y: wa.y + wa.height - h - 16,
+        frame: false, resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
+        alwaysOnTop: true, skipTaskbar: true, focusable: false, show: false, title: "Launch-K アップデート",
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      });
+      progressWin.setMenuBarVisibility(false);
+      progressWin.on("closed", () => { progressWin = null; });
+      progressWin.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(PROGRESS_HTML));
+      progressWin.once("ready-to-show", () => { try { progressWin.showInactive(); } catch (e) { /* 無視 */ } });
+    }
+    const v = version ? JSON.stringify(String(version)) : "null";
+    progressWin.webContents.executeJavaScript(`setP(${Number(pct) || 0},${v})`).catch(() => {});
+  } catch (e) { warn("progress window failed:", e && e.message); }
+}
+function hideProgress() {
+  try {
+    const parent = ctx.getParentWindow();
+    if (parent && !parent.isDestroyed()) parent.setProgressBar(-1);
+  } catch (e) { /* 無視 */ }
+  try { if (progressWin && !progressWin.isDestroyed()) progressWin.close(); } catch (e) { /* 無視 */ }
+  progressWin = null;
+}
+// 更新が終わって最初の起動のときに、「更新しました」を1回だけ知らせるための記録（直前に起動していたバージョンと比べる）
+function recordVersionAndDetectUpdate() {
+  try {
+    const file = path.join(app.getPath("userData"), "last-version.json");
+    let prev = null;
+    try { prev = JSON.parse(fs.readFileSync(file, "utf-8")).version || null; } catch (e) { prev = null; }
+    const cur = app.getVersion();
+    if (prev && prev !== cur && isNewer(cur, prev)) updatedNotice = { from: prev, to: cur };
+    if (prev !== cur) fs.writeFileSync(file, JSON.stringify({ version: cur }), "utf-8");
+  } catch (e) { warn("version record failed:", e && e.message); }
+}
+function takeUpdatedNotice() { const n = updatedNotice; updatedNotice = null; return n; }
+
 function init(options) {
   ctx = Object.assign(ctx, options || {});
   log("==== Launch-K started ====", describeEnvironment());
+  recordVersionAndDetectUpdate();
   if (!isEnabled()) {
     log("updater disabled (packaged =", app.isPackaged, ", electron-updater loaded =", !!autoUpdater, ")");
     return;
@@ -272,12 +342,14 @@ function init(options) {
 
   autoUpdater.on("update-available", (info) => {
     log("event update-available", info && info.version);
+    pendingVersion = info && info.version ? info.version : null;
     if (state !== "downloaded") state = "downloading";
   });
   autoUpdater.on("update-not-available", () => {
     if (state !== "downloaded") state = "idle";
   });
   autoUpdater.on("download-progress", (p) => {
+    if (p && typeof p.percent === "number" && state !== "downloaded") showProgress(p.percent, pendingVersion);
     const pct = p && typeof p.percent === "number" ? Math.floor(p.percent / 25) * 25 : -1;
     if (pct !== lastProgressLogged) {
       lastProgressLogged = pct;
@@ -286,6 +358,7 @@ function init(options) {
   });
   autoUpdater.on("update-downloaded", (info) => {
     state = "downloaded";
+    hideProgress();
     downloadedVersion = info && info.version;
     log("event update-downloaded", downloadedVersion);
     // 「あとで」を選んだあとの定期確認では、同じ案内を繰り返さない
@@ -293,6 +366,7 @@ function init(options) {
   });
   autoUpdater.on("error", (err) => {
     logError("event error", err);
+    hideProgress();
     if (state !== "downloaded") state = "idle";
   });
 
@@ -310,4 +384,4 @@ function getUpdateLogPath() {
   return null;
 }
 
-module.exports = { init, checkNow, log, logError, getUpdateLogPath };
+module.exports = { init, checkNow, log, logError, getUpdateLogPath, takeUpdatedNotice };

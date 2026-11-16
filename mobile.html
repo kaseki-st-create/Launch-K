@@ -91,14 +91,15 @@ input.otp {
 }
 .tile { touch-action: none; }
 .tile:active { transform: scale(0.94); filter: brightness(0.88); }
-/* 長押しの途中：0.2秒たつと、枠が少しずつ白く縁取られていく（0.67秒で名前が出る） */
-.tile.charging { animation: lpcharge 470ms linear forwards; }
+/* 長押しの途中：0.2秒たつと、枠が少しずつ白く縁取られていく（0.62秒で名前が出る） */
+.tile.charging { animation: lpcharge 390ms linear forwards; } /* 長押しの途中経過：200ms後から始まり、長押しの確定（590ms）で満ちる */
 @keyframes lpcharge { from { box-shadow: inset 0 0 0 0 rgba(255,255,255,0); } to { box-shadow: inset 0 0 0 6px rgba(255,255,255,0.65); } }
 .tile.lp-done { animation: lpdone 260ms ease; }
 @keyframes lpdone { 0% { transform: scale(1.07); } 100% { transform: scale(1); } }
 #nameTip { position: fixed; z-index: 15; display: none; max-width: 78%; padding: 8px 12px; border-radius: 12px; background: rgba(20,22,27,0.97); color: #fff; border: 1px solid #4B515D; font-size: 14px; font-weight: 700; line-height: 1.4; text-align: center; pointer-events: none; word-break: break-word; }
 #nameTip.on { display: block; }
 #nameTip small { display: block; font-weight: 500; font-size: 11px; color: #FF9F43; margin-top: 2px; }
+.tile.timerbusy { opacity: 0.6; } /* PCでタイマー画面が開いている間は、タイマーのボタンを少し暗くする（押すと「すでに開いています」と出る） */
 #s-op.multibusy .tile { opacity: 0.4; }                       /* マルチ操作の実行中は、ほかのボタンを押せない */
 .tile.running { opacity: 1 !important; animation: runpulse 1s ease-in-out infinite; } /* 実行中のボタン */
 @keyframes runpulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.55); } }
@@ -107,6 +108,7 @@ input.otp {
 .tile.ng { animation: ngflash 520ms ease; }
 @keyframes okflash { 0% { filter: brightness(1.8); } 100% { filter: brightness(1); } }
 @keyframes ngflash { 0% { box-shadow: inset 0 0 0 4px #FF6B5E; } 100% { box-shadow: inset 0 0 0 0 #FF6B5E; } }
+.tile.micoff { opacity: 0.45; } /* マイクが未接続・未選択のボタン（PCと同じく、薄く） */
 .tile.blocked { opacity: 0.38; }
 .chip { display: flex; align-items: center; justify-content: center; overflow: hidden; pointer-events: none;
   box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(255,255,255,0.10); }
@@ -115,6 +117,8 @@ input.otp {
 .chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .chip .emoji { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; text-align: center; line-height: 1.05; word-break: break-word; overflow: hidden; text-shadow: 0 1px 1px rgba(0,0,0,0.3); }
 .lockmark { position: absolute; right: 6px; top: 4px; font-size: 14px; }
+/* マイクの注意マーク（PCと同じ見た目）：一部だけ開いている／状態を確認できないとき */
+.micwarn { position: absolute; top: 6px; right: 6px; width: 18px; height: 18px; border-radius: 50%; background: #FFB238; color: #14161B; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center; pointer-events: none; }
 #pager { flex: none; display: flex; align-items: center; }
 #pager.off { visibility: hidden; }
 #pager button {
@@ -122,10 +126,37 @@ input.otp {
   background: var(--panelSolid, rgba(29,33,41,0.76)); color: var(--text, #EDEFF2); font-size: 13px;
 }
 #pager button:disabled { opacity: 0.35; }
+/* 当たり判定だけを上下に広げる（見た目の大きさ・位置・字の大きさは変えない）。左右は広げないので、隣のボタンや「1 / 3」とは重ならない。バー（高さ44px）の外にも出ない */
+#pager button, #menuBtn { position: relative; }
+#pager button::before { content: ""; position: absolute; left: 0; right: 0; top: -6px; bottom: -6px; } /* 枠線1pxの外側から5px */
+#menuBtn::before { content: ""; position: absolute; left: 0; right: 0; top: -5px; bottom: -5px; } /* 枠線1pxの外側から4px */
 #pcount { min-width: 44px; text-align: center; font-size: 13px; font-weight: 700; }
 #banner { position: absolute; left: 10px; right: 10px; top: 48px; z-index: 5; display: none; padding: 10px 12px; border-radius: 12px; background: #FFB238; color: #14161B; font-size: 13px; font-weight: 700; }
 #banner.on { display: block; }
 #banner button { margin-left: 8px; border: none; border-radius: 8px; padding: 6px 10px; font-weight: 700; background: #14161B; color: #FFB238; }
+/* ロック画面（Launch-passの入力／PCがスリープ・ロック中）。入力キーと「切断」は、親指が届く下側に置く */
+#lockLayer { position: absolute; left: 0; right: 0; top: 46px; bottom: 0; z-index: 7; display: none; flex-direction: column; justify-content: space-between; padding: 12px 14px calc(14px + env(safe-area-inset-bottom)); background: rgba(14,16,20,0.92); }
+#lockLayer.on { display: flex; }
+#lockInfo { text-align: center; padding-top: 10px; }
+#lockTitle { font-size: 17px; font-weight: 800; margin-bottom: 8px; }
+#lockText { font-size: 13px; line-height: 1.7; color: #C5CAD3; }
+#lockCount { display: none; margin: 12px auto 0; max-width: 340px; padding: 8px 10px; border-radius: 10px; background: #FFB238; color: #14161B; font-size: 13px; font-weight: 800; }
+#lockCount.on { display: block; }
+#lockCount.note { background: #2B303A; color: #EDEFF2; }
+#lockBottom { width: 100%; max-width: 340px; margin: 0 auto; }
+#passArea { display: none; }
+#passArea.on { display: block; }
+#passDots { display: flex; gap: 12px; justify-content: center; margin: 4px 0 4px; }
+#passDots i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #8A93A3; }
+#passDots i.f { background: #EDEFF2; border-color: #EDEFF2; }
+#passMsg { min-height: 18px; text-align: center; font-size: 12px; font-weight: 700; color: #FF6B5E; margin-bottom: 6px; }
+#pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+#pad button { padding: 13px 0; font-size: 20px; font-weight: 700; border: none; border-radius: 12px; background: #2B303A; color: #EDEFF2; font-family: inherit; }
+#pad button:active { background: #3A4150; }
+#pad button:disabled { opacity: 0.4; }
+/* マイクのミュート（オフ）：画像・絵文字には、赤い斜線を重ねる（接続されていないとき＝全体を暗く、とは別の表示） */
+.chip.slashed { position: relative; }
+.chip.slashed::after { content: ""; position: absolute; left: 14%; right: 14%; top: 50%; height: 0; border-top: max(3px, 7%) solid #FF3B30; transform: rotate(-45deg); border-radius: 4px; box-shadow: 0 0 0 1px rgba(255,255,255,0.55); pointer-events: none; }
 #toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 86%; z-index: 6; display: none;
   background: rgba(20,22,27,0.92); color: #EDEFF2; border: 1px solid #3B414D; padding: 9px 14px; border-radius: 12px; font-size: 13px; text-align: center; }
 #toast.on { display: block; }
@@ -141,7 +172,19 @@ input.otp {
 }
 #drawer.on { transform: translateX(0); visibility: visible; box-shadow: -10px 0 30px rgba(0,0,0,0.4); }
 #drawer h2 { font-size: 12px; color: #8B92A0; margin: 8px 0 8px; font-weight: 600; letter-spacing: 0.5px; }
-#pageList { overflow-y: auto; flex: 1 1 auto; }
+/* 中身（画面一覧〜接続の安全）は縦にスクロールできる。切断ボタンだけは下に固定。続きがあるときは上下に薄いぼかしを出す */
+#drawerWrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#drawerWrap::before, #drawerWrap::after { content: ""; position: absolute; left: 0; right: 0; height: 22px; z-index: 2; pointer-events: none; opacity: 0; transition: opacity 120ms; }
+#drawerWrap::before { top: 0; background: linear-gradient(#1D2129, rgba(29,33,41,0)); }
+#drawerWrap::after { bottom: 0; background: linear-gradient(rgba(29,33,41,0), #1D2129); }
+#drawerWrap.mt::before, #drawerWrap.mb::after { opacity: 1; }
+#drawerScroll { position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; scrollbar-width: thin; }
+#drawerScroll::-webkit-scrollbar { width: 4px; }
+#drawerScroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.28); border-radius: 2px; }
+#pageList { flex: none; }
+#secHead { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 4px; padding: 10px 2px; font-size: 12px; color: #8B92A0; font-weight: 600; letter-spacing: 0.5px; cursor: pointer; }
+#secHead .arrow { font-size: 11px; margin-left: 8px; flex: none; }
+#disconnectBtn { flex: none; margin-top: 8px; }
 #secBox { flex: none; margin: 4px 0 12px; padding: 10px 12px; border-radius: 12px; background: #262B35; border: 1px solid #2B303A; font-size: 12.5px; line-height: 1.55; color: #C9CED8; }
 #secBox .row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
 #secBox .row span:first-child { color: #8B92A0; flex: none; }
@@ -150,6 +193,20 @@ input.otp {
 #secBox .warn { color: #FFB238; font-weight: 700; }
 .pgbtn { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 14px 14px; margin-bottom: 8px; border-radius: 12px; border: 1px solid #2B303A; background: #262B35; color: #EDEFF2; font-size: 16px; font-family: inherit; }
 .pgbtn.cur { background: #FFB238; color: #14161B; border-color: #FFB238; font-weight: 700; }
+/* 横画面（高さが低いとき）だけ：画面一覧を2列（1,2 / 3,4 / 5,6の順）、接続の安全の詳細も2列にして、幅を広げる。縦画面は今のまま */
+@media (orientation: landscape) and (max-height: 520px) {
+  #drawer { width: 56%; max-width: 440px; padding-top: calc(env(safe-area-inset-top, 0px) + 8px); padding-right: calc(env(safe-area-inset-right, 0px) + 16px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 10px); }
+  #pageList { display: grid; grid-template-columns: 1fr 1fr; column-gap: 8px; }
+  #drawer h2 { margin: 2px 0 6px; }
+  .pgbtn { min-width: 0; margin-bottom: 6px; padding: 9px 12px; }
+  #secHead { margin: 0; padding: 6px 2px; }
+  #secBox { margin: 0 0 4px; padding-top: 6px; padding-bottom: 6px; }
+  #secBox.detail { display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
+  /* 長い項目（接続できる端末・経路）は、折り返さないよう1行ぶんの幅を使う（順番だけ後ろに回す） */
+  #secBox.detail .row:nth-child(2) { order: 6; grid-column: 1 / -1; }
+  #secBox.detail .row:nth-child(4) { order: 7; grid-column: 1 / -1; }
+  #disconnectBtn { margin-top: 6px; padding-top: 10px; padding-bottom: 10px; }
+}
 .confirmBack { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 30; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; padding: 24px; }
 .confirmBack.on { display: flex; }
 .confirmBox { width: 100%; max-width: 340px; background: #1D2129; border-radius: 18px; padding: 20px; }
@@ -190,6 +247,18 @@ input.otp {
     <div id="banner"></div>
     <div id="gridArea"><div id="grid"></div></div>
     <div id="toast"></div>
+    <div id="lockLayer" role="dialog" aria-modal="true" aria-live="polite">
+      <div id="lockInfo"><div id="lockTitle"></div><div id="lockText"></div><div id="lockCount"></div></div>
+      <div id="lockBottom">
+        <div id="passArea">
+          <div id="passDots" aria-label="Launch-pass 4桁"><i></i><i></i><i></i><i></i></div>
+          <div id="passMsg"></div>
+          <div id="pad"><button type="button" data-k="1">1</button><button type="button" data-k="2">2</button><button type="button" data-k="3">3</button><button type="button" data-k="4">4</button><button type="button" data-k="5">5</button><button type="button" data-k="6">6</button><button type="button" data-k="7">7</button><button type="button" data-k="8">8</button><button type="button" data-k="9">9</button><button type="button" data-k="x" aria-label="すべて消す">C</button><button type="button" data-k="0">0</button><button type="button" data-k="b" aria-label="1つ消す">⌫</button></div>
+        </div>
+        <button class="btn primary" id="takeOver" type="button" style="display:none;">このタブで使う</button>
+        <button class="btn danger" id="lockDisc" type="button">接続を切断</button>
+      </div>
+    </div>
   </div>
 
   <div id="s-end" class="screen center">
@@ -203,10 +272,14 @@ input.otp {
 
 <div id="drawerBack"></div>
 <div id="drawer">
-  <h2>画面を切り替え</h2>
-  <div id="pageList"></div>
-  <h2>接続の安全</h2>
-  <div id="secBox"></div>
+  <div id="drawerWrap">
+    <div id="drawerScroll">
+      <h2>画面を切り替え</h2>
+      <div id="pageList"></div>
+      <div id="secHead" role="button" tabindex="0" aria-expanded="false"><span id="secHeadText">接続の安全（簡易表示）</span><span class="arrow" id="secArrow">▼</span></div>
+      <div id="secBox"></div>
+    </div>
+  </div>
   <button class="btn danger" id="disconnectBtn">接続を切断</button>
 </div>
 <div class="confirmBack" id="confirmBack">
@@ -254,6 +327,16 @@ input.otp {
   function storeSet(k, v) { try { window.sessionStorage.setItem(k, v); } catch (e) { /* 無視 */ } }
   function storeDel(k) { try { window.sessionStorage.removeItem(k); } catch (e) { /* 無視 */ } }
 
+  // このページ（タブ）の識別子：開いた時刻-乱数。同じ接続を複数のタブで開いたとき、いちばん新しく開いたタブだけが有効になる（PC側が判断する）
+  function newTabId() {
+    var r = "";
+    try { var a = new Uint8Array(6); (window.crypto || {}).getRandomValues(a); for (var i = 0; i < a.length; i++) r += ("0" + a[i].toString(16)).slice(-2); } catch (e) { r = ""; }
+    if (r.length < 8) r = Math.random().toString(36).slice(2, 10) + "0000";
+    return String(Date.now()) + "-" + r.replace(/[^a-z0-9]/g, "").slice(0, 12);
+  }
+  var TAB = newTabId();
+  var otherTab = false; // 別のタブが開かれて、このタブが古くなったとき true
+
   var K = param("k");
   var secInfo = null, secInfoAt = 0, secTimer = null; // PCから届いた「接続の安全」の情報と、受け取った時刻
   var execBusy = false, execMulti = false; // PCで実行中の操作／そのうちマルチ操作があるか
@@ -278,11 +361,13 @@ input.otp {
   var lastOkAt = Date.now(); // PCから最後に応答があった時刻
   var lostShown = false, probing = false, wdTimer = null;
   var bannerKind = "";
-  var STALE_MS = 120000, LOST_MS = 360000; // 無応答がこれだけ続くと「途切れています」の表示／切断。PC側（remote.js の STALE_AFTER_MS・DROP_AFTER_MS）と同じ値にする
+  var STALE_MS = 180000, CAUTION_MS = 300000, LOST_MS = 1800000; // 無応答が、3分で「お知らせ」、5分で「注意」（切断までのカウントダウン付き）、30分で切断。PC側（remote.js の STALE_AFTER_MS・DROP_AFTER_MS）と同じ値にする
+  var AWAY_NOTICE_S = 180, AWAY_CAUTION_S = 300, AWAY_LOCK_S = 900, AWAY_LIMIT_S = 1800; // PCのスリープ・ロック中の時間割（PCから送られた値で上書きされる）
   var PRE_LOST_MS = 25000;   // まだ操作画面になる前（PCの許可待ちなど）に、PCから応答が無いまま、これだけたったら確認する
   var PROBE_MS = 5000;       // パスワード入力画面で、PCがまだ待っているかを確かめる間隔
   var PROBE_FAILS = 3;       // 連続でこれだけ届かなければ「PCに届かない」と表示する
-  var LONGPRESS_MS = 670;    // これ以上押し続けると「長押し」＝名前を表示する（それより短ければ通常のタップ）
+  var LONGPRESS_MS = 590;    // これ以上押し続けると「長押し」＝名前を表示する（それより短ければ通常のタップ）
+  var NAME_TIP_HIDE_MS = 1100; // 長押しで出した名前が、指を離してから消えるまで
   var CHARGE_AFTER_MS = 200; // 長押しの途中経過の表示を始めるまで
   var MOVE_LIMIT = 12;       // 押している間に指がこれ以上動いたら、タップでも長押しでもない（取り消し）
   var press = null, tipTimer = null;
@@ -290,12 +375,13 @@ input.otp {
   var REASONS = {
     "user-pc": "PCで切断されました。",
     "user-phone": "切断しました。",
-    "timeout": "通信が途切れたため、切断しました。",
-    "idle": "しばらく操作がなかったため、切断しました。",
+    "timeout": "通信が30分途切れたため、切断しました。",
+    "idle": "60分間操作がなかったため、切断しました。",
+    "pass-fails": "Launch-passを3回続けて間違えたため、切断しました。",
     "maxtime": "最大の接続時間に達したため、切断しました。",
-    "phone-hidden": "画面を長い間閉じていたため、切断しました。",
-    "pc-sleep": "PCがスリープしたため、切断しました。",
-    "pc-lock": "PCの画面がロックされたため、切断しました。",
+    "phone-hidden": "画面を30分間開いていなかったため、切断しました。",
+    "pc-sleep": "PCのスリープ・休止が30分を超えたため、切断しました。",
+    "pc-lock": "PCの画面ロックが30分を超えたため、切断しました。",
     "network": "PCのネットワークが変わったため、切断しました。",
     "closed": "PCでLaunch-0が閉じられました。",
     "app-quit": "Launch-Kが終了しました。",
@@ -305,7 +391,7 @@ input.otp {
     "wait-timeout": "PCで、接続の待ち時間が過ぎたため、Launch-0が閉じられました。",
     "unreachable": "PCに届きません。PCでLaunch-0が閉じられたか、PCまたはiPhoneのTailscaleがオフになっている可能性があります。",
     "approval-timeout": "PCで許可されなかったため、時間切れになりました。",
-    "lost": "通信が一定時間（約6分）途切れたため、切断しました。PCやiPhoneのTailscaleがオンか、電波の状態を確認してください。",
+    "lost": "通信が一定時間（約30分）途切れたため、切断しました。PCやiPhoneのTailscaleがオンか、電波の状態を確認してください。",
     "identity": "この端末を、PCと同じアカウントの端末と確認できなくなったため、切断しました。",
     "tailscale-down": "PCのTailscaleが止まったため、切断しました。",
     "error": "PC側に問題が起きたため、切断しました。",
@@ -355,6 +441,10 @@ input.otp {
     $("waitCancel").addEventListener("click", function () { post("/api/bye", {}).then(function () { finish("user-phone"); }, function () { finish("user-phone"); }); });
     $("menuBtn").addEventListener("click", function () { openDrawer(true); });
     $("drawerBack").addEventListener("click", function () { openDrawer(false); });
+    $("secHead").addEventListener("click", toggleSec);
+    $("secHead").addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSec(); } });
+    $("drawerScroll").addEventListener("scroll", updFade);
+    window.addEventListener("resize", updFade);
     $("prevBtn").addEventListener("click", function () { setSub(subPage - 1); });
     $("nextBtn").addEventListener("click", function () { setSub(subPage + 1); });
     $("disconnectBtn").addEventListener("click", function () {
@@ -372,6 +462,14 @@ input.otp {
         finish("user-phone");
       }, function () { finish("user-phone"); });
     });
+
+    $("pad").addEventListener("click", function (ev) {
+      var b = ev.target && ev.target.closest ? ev.target.closest("button") : null;
+      if (b && b.getAttribute("data-k")) padPress(b.getAttribute("data-k"));
+    });
+    $("lockDisc").addEventListener("click", lockDisconnect);
+    $("takeOver").addEventListener("click", takeOver);
+    setInterval(uiTick, 1000);
 
     if (sid) {
       // ページを再読み込みした場合など：続きから
@@ -439,8 +537,13 @@ input.otp {
   function post(path, body) {
     var headers = { "Content-Type": "application/json" };
     if (sid) headers["X-Sid"] = sid;
+    headers["X-Tab"] = TAB;
     return fetch(path, { method: "POST", headers: headers, body: JSON.stringify(body || {}), cache: "no-store" }).then(function (r) {
-      return r.json().then(function (j) { j.__status = r.status; return j; }, function () { return { ok: false, __status: r.status }; });
+      return r.json().then(function (j) {
+        j.__status = r.status;
+        if (r.status === 409 && j.error === "othertab") othertabOn(); // 別のタブが開かれた：このタブは通信を止める
+        return j;
+      }, function () { return { ok: false, __status: r.status }; });
     });
   }
 
@@ -488,7 +591,7 @@ input.otp {
   function openStream() {
     if (es) { try { es.close(); } catch (e) { /* 無視 */ } es = null; }
     if (typeof EventSource === "undefined") { showEnd("このブラウザでは使えません", "Safariの最新版でお試しください。"); return; }
-    es = new EventSource("/api/events?sid=" + encodeURIComponent(sid));
+    es = new EventSource("/api/events?sid=" + encodeURIComponent(sid) + "&tab=" + encodeURIComponent(TAB));
     es.onopen = function () { lastEventAt = Date.now(); markOk(); setNet(false); };
     es.onmessage = function (e) {
       lastEventAt = Date.now(); markOk(); setNet(false);
@@ -520,14 +623,19 @@ input.otp {
   }
 
   function sendPing() {
-    if (ended || !sid) return;
+    if (ended || !sid || otherTab) return;
     post("/api/ping", { hidden: document.hidden }).then(function (j) {
       if (j && (j.__status === 401 || j.__status === 403)) finish(j.reason || "session");
-      else if (j && j.ok) { markOk(); paused = !!j.paused; applyPaused(); }
+      else if (j && j.ok) {
+        markOk(); paused = !!j.paused; applyPaused();
+        if (j.away && !away) awayOn(j.away.kind, j.away.ago || 0);
+        else if (!j.away && away) awayOff();
+        if (j.locked && !locked) lockOn(j.lockWhy); else if (!j.locked && locked) lockOff();
+      }
     }, function () { /* 一時的に届かないだけ。サーバー側の判定に任せる */ });
   }
   function onVisibility() {
-    if (ended) return;
+    if (ended || otherTab) return;
     sendPing();
     if (!document.hidden) { acquireWakeLock(); watchdog(); }
   }
@@ -540,10 +648,11 @@ input.otp {
   }
 
   // ---------- 通信が途切れていないかの見張り ----------
-  // 120秒応答がなければ「途切れています」、360秒たつと確認して、届かなければスマホ自身が切断表示にする。
+  // 120秒応答がなければ「途切れています」、600秒（10分）たつと確認して、届かなければスマホ自身が切断表示にする。
   // まだ操作画面になる前（PCの許可待ち）は、PCが消えたまま待ち続けないよう、25秒で確認する。
   function markOk() {
     lastOkAt = Date.now();
+    if (lostSince) { lostSince = 0; renderLock(); }
     if (lostShown) { lostShown = false; if (bannerKind === "lost") hideBanner(); }
   }
   function withTimeout(p, ms) {
@@ -553,8 +662,13 @@ input.otp {
     if (ended) return;
     var silent = Date.now() - lastOkAt;
     if (!snap) { if (sid && silent > PRE_LOST_MS) probe(true); return; }
+    if (away) return; // PCがスリープ・ロック中は、別の表示（下の awayOn）で時間を数える
     if (silent > LOST_MS) { probe(); return; }
-    if (silent > STALE_MS && !lostShown) { lostShown = true; showBanner("通信が途切れています…", false, "lost"); }
+    if (silent > STALE_MS && (!lostShown || bannerKind === "lost")) {
+      lostShown = true;
+      // 3分：お知らせ／5分：注意（自動で切断するまでのカウントダウン付き。15分を超えると、戻ったときにLaunch-passが必要）
+      showBanner(silent > CAUTION_MS ? "注意：通信が途切れています。あと" + fmtMS(LOST_MS - silent) + "で自動的に切断します。" : "通信が途切れています…", false, "lost");
+    }
   }
   function probe(pre) {
     if (probing) return;
@@ -579,7 +693,13 @@ input.otp {
       case "tapres": onTapResult(m); break;
       case "exec": execBusy = !!m.busy; execMulti = !!m.multi; applyExec(); break;
       case "warn": showWarn(m); break;
-      case "extended": hideBanner(); break;
+      case "extended": hideBanner(); idleCaution = null; break;
+      case "locked": lockOn(m.why, m.passLeft); break;
+      case "unlocked": lockOff(); break;
+      case "idle-caution": idleCaution = { phase: m.phase, at: Date.now() + (Number(m.secs) || 0) * 1000 }; renderLock(); uiTick(); break;
+      case "caution-end": idleCaution = null; if (bannerKind === "idle") hideBanner(); renderLock(); break;
+      case "pcaway": awayOn(m.kind, 0, m); break;
+      case "pcback": awayOff(); if (m.locked) lockOn(m.lockWhy, m.passLeft); break;
       case "bye": finish(m.reason || "closed", true); break;
       default: break;
     }
@@ -601,6 +721,9 @@ input.otp {
     layoutRoot();
     renderAll();
     applyExec();
+    // 再接続・再読み込みのときも、ロック中（Launch-pass待ち）／PCがスリープ・ロック中の状態を引き継ぐ
+    if (m.away) awayOn(m.away.kind, m.away.ago || 0); else awayOff();
+    if (m.locked) lockOn(m.lockWhy, m.passLeft); else lockOff();
   }
 
   // ---------- 描画 ----------
@@ -689,12 +812,13 @@ input.otp {
 
   function stateOff(t) {
     var key = t.icon && t.icon.toggle;
-    return !!(key && snap.states && snap.states[key] === true);
+    var v = key && snap.states ? snap.states[key] : null;
+    return v === true || v === "muted"; // マイクは文字（muted / open / partial / unknown）、それ以外は true/false
   }
 
   function buildTile(t, cell, chipSize, tileRadius, chipRadius, theme) {
     var b = document.createElement("button");
-    b.className = "tile" + (t.blocked ? " blocked" : "");
+    b.className = "tile" + (t.blocked ? " blocked" : "") + (t.timer && snap.states && snap.states.timer === true ? " timerbusy" : "");
     b.style.borderRadius = tileRadius + "px";
     b.setAttribute("data-id", t.id);
     b.setAttribute("aria-label", t.name || "");
@@ -711,7 +835,9 @@ input.otp {
       var img = document.createElement("img");
       img.alt = "";
       img.onerror = function () { img.style.display = "none"; };
-      img.src = "/api/img/" + encodeURIComponent(t.id) + "?sid=" + encodeURIComponent(sid);
+      // マイク・スピーカーのミュート中（オフ）は、オフ用に選ばれた画像があればそれを使う（無ければ、同じ画像に赤い斜線）
+      var imgId = (off && ic.offImg && ic.toggle && String(ic.toggle).indexOf("snd:") !== 0) ? t.id + "_off" : t.id;
+      img.src = "/api/img/" + encodeURIComponent(imgId) + "?sid=" + encodeURIComponent(sid);
       chip.appendChild(img);
     } else if (ic.kind === "emoji") {
       var chars = Array.from ? Array.from(ic.emoji || "") : String(ic.emoji || "").split("");
@@ -719,7 +845,8 @@ input.otp {
       var em = document.createElement("span");
       em.className = "emoji";
       em.style.fontSize = Math.round(chipSize * scale) + "px";
-      em.textContent = ic.emoji || "";
+      var emTxt = (off && ic.offEmoji && ic.toggle && String(ic.toggle).indexOf("snd:") !== 0) ? ic.offEmoji : (ic.emoji || "");
+      em.textContent = emTxt;
       chip.appendChild(em);
     } else {
       // CSSアイコン：図柄の定義はPCが送ってきたもの（PC内蔵の固定の図柄）を使う
@@ -731,7 +858,12 @@ input.otp {
       }
       svg = safeSvg(svg);
       var fg, bg;
-      if (off && ic.toggle && String(ic.toggle).indexOf("snd:") !== 0) { fg = "#FF6B5E"; bg = "#FF6B5E33"; } // サウンドの「オフ」は、本体の色はそのまま（斜線だけが赤い）
+      var oc = /^#[0-9a-fA-F]{6}$/.test(ic.offColor || "") ? ic.offColor : "";
+      if (off && ic.toggle && String(ic.toggle).indexOf("snd:") !== 0) {
+        // オフ（ミュート中）：オフ用に色が選ばれていればその色、無ければ今までどおりの赤
+        if (oc) { if (ic.filled) { fg = safeColor(ic.offFgFilled, "#FFFFFF"); bg = oc; } else { fg = oc; bg = oc + "26"; } }
+        else { fg = "#FF6B5E"; bg = "#FF6B5E33"; }
+      } // サウンドの「オフ」は、本体の色はそのまま（斜線だけが赤い）
       else if (ic.filled) { fg = safeColor(ic.fgFilled, "#FFFFFF"); bg = color; }
       else { fg = color; bg = color + "26"; }
       chip.style.background = bg;
@@ -743,8 +875,24 @@ input.otp {
     }
     if (ic.kind === "emoji" || (ic.kind === "image" && ic.img)) {
       if (ic.kind === "emoji") chip.style.background = color + "26";
+      // オン/オフを持つボタンは、オフのとき、画像・絵文字を少し暗くして見分けられるようにする。
+      // ただしマイクは、オフ（ミュート）のとき赤い斜線を重ねる（マイクが接続されていないときの「全体を暗く」と見分けるため）
+      if (off && ic.toggle && chip.firstChild) {
+        if (String(ic.toggle).indexOf("snd:") !== 0) { if (!(ic.kind === "image" ? ic.offImg : ic.offEmoji)) chip.className += " slashed"; } // マイク・スピーカー：オフ用の表示が無ければ赤い斜線
+        else chip.firstChild.style.filter = "brightness(0.6)"; // サウンドは、今までどおり少し暗く
+      }
     }
     b.appendChild(chip);
+    // マイク：一部だけ開いている／状態を確認できないときは、右上に注意マーク（PCと同じ）
+    var mv = (snap.states && ic.toggle && String(ic.toggle).indexOf("mic:") === 0) ? snap.states[ic.toggle] : null;
+    if (mv === "none" || mv === "unselected") { b.className += " micoff"; b.setAttribute("aria-disabled", "true"); }
+    if (mv === "partial" || mv === "unknown") {
+      var mk = document.createElement("span");
+      mk.className = "micwarn";
+      mk.textContent = "!";
+      mk.setAttribute("aria-label", mv === "partial" ? "一部のマイクが開いています" : "マイクの状態を確認できません");
+      b.appendChild(mk);
+    }
     if (t.blocked) {
       var lk = document.createElement("span");
       lk.className = "lockmark";
@@ -769,6 +917,7 @@ input.otp {
         box.appendChild(btn);
       })(i);
     }
+    updFade();
   }
   function switchPage(idx) {
     endPress(false); hideNameTip();
@@ -801,21 +950,51 @@ input.otp {
     return row;
   }
   function badge(text, cls) { var s = document.createElement("span"); s.className = cls; s.textContent = text; return s; }
+  // 「接続の安全」の表示：初期は簡易表示（接続先のPC・経路・通信状態）。見出しをタップすると詳細表示。開閉はこの端末に保存する
+  var secDetail = (function () { try { return window.localStorage.getItem("lk_secDetail") === "1"; } catch (e) { return false; } })();
   function applySec() {
     var box = $("secBox");
     if (!box) return;
     while (box.firstChild) box.removeChild(box.firstChild);
-    box.appendChild(secRow("通信", badge("🔒 Tailscaleで暗号化", "ok")));
-    box.appendChild(secRow("接続できる端末", "PCと同じアカウントの端末だけ"));
+    box.className = secDetail ? "detail" : "";
+    setText("secHeadText", secDetail ? "接続の安全（詳細表示）" : "接続の安全（簡易表示）");
+    setText("secArrow", secDetail ? "▲" : "▼");
+    try { $("secHead").setAttribute("aria-expanded", secDetail ? "true" : "false"); } catch (e) { /* 無視 */ }
+    if (secDetail) {
+      box.appendChild(secRow("通信", badge("🔒 Tailscaleで暗号化", "ok")));
+      box.appendChild(secRow("接続できる端末", "PCと同じアカウントの端末だけ"));
+    }
     box.appendChild(secRow("接続先のPC", secInfo && secInfo.pc ? secInfo.pc : "-"));
     box.appendChild(secRow("経路", routeText(secInfo ? secInfo.route : "")));
     var bad = lostShown || (Date.now() - lastOkAt > 15000);
     box.appendChild(secRow("通信状態", bad ? badge("途切れています", "warn") : badge("正常", "ok")));
-    if (secInfo) {
+    if (secDetail && secInfo) {
       var el = (Date.now() - secInfoAt) / 1000;
       box.appendChild(secRow("操作がないとき", "あと" + fmtLeft(secInfo.idleLeft - el) + "で自動切断"));
       box.appendChild(secRow("最大の接続時間", "あと" + fmtLeft(secInfo.maxLeft - el)));
     }
+    updFade();
+  }
+  function toggleSec() {
+    secDetail = !secDetail;
+    try { window.localStorage.setItem("lk_secDetail", secDetail ? "1" : "0"); } catch (e) { /* 保存できなくても動く */ }
+    applySec();
+    if (secDetail) revealSec();
+    updFade();
+  }
+  // 詳細表示を開いたとき、開いた部分が見える位置まで自動でスクロールする（見出しは見えたまま）
+  function revealSec() {
+    var sc = $("drawerScroll"), box = $("secBox"), head = $("secHead");
+    if (!sc || !box || !head) return;
+    var need = (box.offsetTop + box.offsetHeight) - (sc.scrollTop + sc.clientHeight) + 6;
+    if (need > 0) sc.scrollTop = Math.max(sc.scrollTop, Math.min(sc.scrollTop + need, Math.max(0, head.offsetTop - 4)));
+  }
+  // 続きがあるとき（上・下）に、薄いぼかしを出す
+  function updFade() {
+    var sc = $("drawerScroll"), w = $("drawerWrap");
+    if (!sc || !w) return;
+    var mt = sc.scrollTop > 2, mb = sc.scrollTop + sc.clientHeight < sc.scrollHeight - 2;
+    w.className = (mt ? "mt " : "") + (mb ? "mb" : "");
   }
   function setSecInfo(info) {
     if (!info || typeof info !== "object") return;
@@ -826,12 +1005,14 @@ input.otp {
   function openDrawer(on) {
     if (secTimer) { clearInterval(secTimer); secTimer = null; }
     if (on) { applySec(); secTimer = setInterval(applySec, 1000); }
-    if (on) { endPress(false); hideNameTip(); }
+    if (on) { endPress(false); hideNameTip(); try { $("drawerScroll").scrollTop = 0; } catch (e) { /* 無視 */ } }
     $("drawer").className = on ? "on" : "";
     $("drawerBack").className = on ? "on" : "";
+    updFade();
+    if (on) setTimeout(updFade, 220);
   }
 
-  // ---------- 押し方の区別：タップ（0.67秒未満）／長押し（0.67秒以上で名前を表示） ----------
+  // ---------- 押し方の区別：タップ（0.62秒未満）／長押し（0.62秒以上で名前を表示） ----------
   function tileEl(id) {
     var list = $("grid").children;
     for (var i = 0; i < list.length; i++) if (list[i].getAttribute("data-id") === id) return list[i];
@@ -911,7 +1092,7 @@ input.otp {
     if (!press || press.pid !== e.pointerId) return;
     var p = press;
     endPress(false);
-    if (p.long) { scheduleTipHide(1800); return; } // 長押しだったので、押した扱い（実行）にはしない
+    if (p.long) { scheduleTipHide(NAME_TIP_HIDE_MS); return; } // 長押しだったので、押した扱い（実行）にはしない
     if (p.cancelled) return;
     var t = findTile(p.id), el = tileEl(p.id);
     if (t && el) onTap(t, el);
@@ -920,7 +1101,7 @@ input.otp {
     if (!press || press.pid !== e.pointerId) return;
     var wasLong = press.long;
     endPress(false);
-    if (wasLong) scheduleTipHide(1800);
+    if (wasLong) scheduleTipHide(NAME_TIP_HIDE_MS);
   }
   function installPress() {
     var g = $("grid");
@@ -949,6 +1130,8 @@ input.otp {
     multibusy: "マルチ操作の実行中は、ほかのボタンを押せません",
     state: "まだ接続できていません",
     stalled: "通信が途切れています。つながるまで少しお待ちください",
+    locked: "ロック中です。Launch-passを入力してください",
+    pcaway: "PCがスリープ・ロック中のため、操作できません",
     abuse: "操作が多すぎます"
   };
   function onTap(t, el) {
@@ -1016,6 +1199,159 @@ input.otp {
     $("disconnectBtn").className = "btn danger" + (busy ? " off" : "");
   }
 
+  // ---------- ロック（Launch-pass）・PCのスリープ/ロック ----------
+  var locked = false, lockWhy = "", passBuf = "", passBusy = false, passCooldownUntil = 0, passLeft = 3;
+  var away = null;          // { kind: "sleep"|"lock", since }  since はスマホの時計（Date.now）
+  var lostSince = 0;        // PCに届かなくなった時刻（15秒以上、応答がないとき。PCのスリープの通知が届かなかった場合も、ここに入る）
+  var UNREACH_MS = 15000;
+  var idleCaution = null;   // { phase: "pass"|"cut", at }       at はスマホの時計での締め切り
+  var awayToastedNotice = false;
+  var LOCK_WHY = {
+    idle: "しばらく操作がなかったため、ロックされました。",
+    hidden: "画面を長く開いていなかったため、ロックされました。",
+    stalled: "通信が長く途切れていたため、ロックされました。",
+    "pc-sleep": "PCが長くスリープ・休止していたため、ロックされました。",
+    "pc-lock": "PCの画面が長くロックされていたため、ロックされました。"
+  };
+  function fmtMS(ms) {
+    var s = Math.max(0, Math.ceil((Number(ms) || 0) / 1000)), m = Math.floor(s / 60), r = s % 60;
+    return m + "分" + (r < 10 ? "0" : "") + r + "秒";
+  }
+  function lockOn(why, left) {
+    locked = true; lockWhy = why || lockWhy || "idle";
+    if (typeof left === "number") passLeft = left;
+    passBuf = ""; drawDots(); setPassMsg("", false);
+    hideBanner(); renderLock();
+  }
+  function lockOff() {
+    locked = false; lockWhy = ""; passBuf = ""; idleCaution = null;
+    if (bannerKind === "idle") hideBanner();
+    renderLock();
+  }
+  function awayOn(kind, agoSec, m) {
+    if (m) { // PCから送られた時間割（秒）
+      if (m.notice) AWAY_NOTICE_S = m.notice; if (m.caution) AWAY_CAUTION_S = m.caution; if (m.lock) AWAY_LOCK_S = m.lock; if (m.limit) AWAY_LIMIT_S = m.limit;
+    }
+    if (away) return;
+    away = { kind: kind === "lock" ? "lock" : "sleep", since: Date.now() - (Number(agoSec) || 0) * 1000 };
+    awayToastedNotice = false;
+    hideBanner(); renderLock(); uiTick();
+  }
+  // 別のタブが開かれた：このタブは、受信・見張り・定期の通信をすべて止める（接続は切らない。保存した接続の情報も消さない）
+  function othertabOn() {
+    if (otherTab || ended) return;
+    otherTab = true;
+    if (es) { try { es.close(); } catch (e) { /* 無視 */ } es = null; }
+    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+    if (wdTimer) { clearInterval(wdTimer); wdTimer = null; }
+    hideBanner(); lostSince = 0; setNet(false);
+    renderLock();
+  }
+  // 「このタブで使う」：新しい識別子になって、受信をやり直す（ほかのタブが、古いタブになる）
+  function takeOver() {
+    if (!otherTab || ended) return;
+    TAB = newTabId();
+    otherTab = false;
+    renderLock();
+    connect();
+  }
+  function awayOff() { if (!away) return; away = null; renderLock(); }
+  function renderLock() {
+    var layer = $("lockLayer");
+    if (!layer) return;
+    var show = !!(otherTab || away || locked || lostSince);
+    layer.className = show ? "on" : "";
+    $("s-op").setAttribute("aria-hidden", "false");
+    if (!show) return;
+    $("passArea").className = (locked && !away && !otherTab) ? "on" : ""; // PCがスリープ・ロック中・届かないときは、Launch-passを入れる場面ではない（切断だけできる）
+    $("takeOver").style.display = otherTab ? "block" : "none";
+    $("lockDisc").style.display = otherTab ? "none" : "block"; // 古いタブからは切断の要求も断られるので、「このタブで使う」だけを出す
+    if (otherTab) {
+      setText("lockTitle", "別のタブで開かれました");
+      setText("lockText", "同じ接続が、ほかのタブで開かれたため、このタブでは操作できません（接続は切れていません）。このタブで使いたいときは、下のボタンを押してください。");
+    } else if (away) {
+      setText("lockTitle", away.kind === "lock" ? "PCの画面がロックされています" : "PC画面がスリープ/休止によりロックされています");
+      setText("lockText", "スマホのボタンは使えません。PCが戻るまで、このままお待ちください。");
+    } else if (locked) {
+      setText("lockTitle", "ロックされています");
+      setText("lockText", (LOCK_WHY[lockWhy] || "ロックされました。") + "Launch-pass（4桁）を入力してください。");
+    } else {
+      setText("lockTitle", "PCに届いていません");
+      setText("lockText", "通信が途切れているか、PCがスリープ・休止している可能性があります。つながるまで、ボタンは使えません。");
+    }
+    updateLockCount();
+  }
+  function updateLockCount() {
+    var el = $("lockCount");
+    if (!el) return;
+    var txt = "", note = false;
+    if (otherTab) { /* 時間のお知らせは出さない */ }
+    else if (away || (lostSince && !locked)) {
+      var e = (Date.now() - (away ? away.since : lostSince)) / 1000;
+      if (e >= AWAY_CAUTION_S) txt = "注意：あと" + fmtMS((AWAY_LIMIT_S - e) * 1000) + "で自動的に切断します。" + (e >= AWAY_LOCK_S ? "（PCが戻ったあとは、Launch-passが必要です）" : "（15分を超えると、PCが戻ったときにLaunch-passが必要です）");
+      else if (e >= AWAY_NOTICE_S) { txt = "お知らせ：PCがまだ戻りません。（" + Math.floor(e / 60) + "分経過）"; note = true; }
+    } else if (locked && idleCaution && idleCaution.phase === "cut") {
+      txt = "注意：あと" + fmtMS(idleCaution.at - Date.now()) + "で自動的に切断します。";
+    }
+    el.textContent = txt;
+    el.className = txt ? (note ? "on note" : "on") : "";
+  }
+  function drawDots() {
+    var d = $("passDots").children;
+    for (var i = 0; i < d.length; i++) d[i].className = i < passBuf.length ? "f" : "";
+  }
+  function setPassMsg(t, bad) { var el = $("passMsg"); el.textContent = t || ""; el.style.color = bad === false ? "#C5CAD3" : "#FF6B5E"; }
+  function padPress(k) {
+    if (passBusy || ended) return;
+    if (Date.now() < passCooldownUntil) { setPassMsg("あと" + fmtMS(passCooldownUntil - Date.now()) + "は入力できません", true); return; }
+    if (k === "b") passBuf = passBuf.slice(0, -1);
+    else if (k === "x") passBuf = "";
+    else if (/^[0-9]$/.test(k) && passBuf.length < 4) passBuf += k;
+    drawDots();
+    if (passBuf.length === 4) submitPass();
+  }
+  function submitPass() {
+    var p = passBuf;
+    passBusy = true; setPassMsg("確認しています…", false);
+    post("/api/unlock", { pass: p }).then(function (j) {
+      passBusy = false; passBuf = ""; drawDots();
+      if (j && j.ok) { setPassMsg("", false); lockOff(); hideBanner(); return; }
+      if (j && j.ended) { setPassMsg("3回続けて間違えたため、切断します。", true); return; } // 切断の知らせは、PCから届く
+      if (j && j.error === "pass") { passLeft = j.left; setPassMsg("Launch-passが違います（あと" + j.left + "回で切断）", true); return; }
+      if (j && j.error === "cooldown") { passCooldownUntil = Date.now() + (Number(j.left) || 0) * 1000; setPassMsg("入力を間違えたため、あと" + fmtMS((Number(j.left) || 0) * 1000) + "は入力できません", true); return; }
+      if (j && (j.__status === 401 || (j.__status === 403 && j.reason))) { finish(j.reason || "session"); return; }
+      setPassMsg("確認できませんでした。もう一度お試しください。", true);
+    }, function () { passBusy = false; passBuf = ""; drawDots(); setPassMsg("PCに届きませんでした。", true); });
+  }
+  // ロック画面の「接続を切断」：確認なしで、すぐ切断（PCが寝ていて届かなくても、スマホ自身が切断する）
+  function lockDisconnect() {
+    withTimeout(post("/api/bye", {}), 2500).then(function () { finish("user-phone"); }, function () { finish("user-phone"); });
+  }
+  // 1秒ごとの表示の更新（時計の差から計算するので、画面を閉じていた間も、戻ったときに正しくなる）
+  function uiTick() {
+    if (ended || otherTab) return;
+    // 15秒以上、PCから応答がなければ、ボタンを使えなくして「PCに届いていません」を出す（つながれば、自動で消える）
+    if (snap && !away) {
+      var quiet = Date.now() - lastOkAt;
+      if (quiet > UNREACH_MS && !lostSince) { lostSince = lastOkAt; renderLock(); }
+      else if (quiet <= UNREACH_MS && lostSince) { lostSince = 0; renderLock(); }
+    }
+    if (away) {
+      var e = (Date.now() - away.since) / 1000;
+      if (e >= AWAY_LIMIT_S) { var k = away.kind; try { post("/api/bye", {}); } catch (x) { /* 無視 */ } finish(k === "lock" ? "pc-lock" : "pc-sleep"); return; }
+      if (e >= AWAY_NOTICE_S && !awayToastedNotice) { awayToastedNotice = true; toast("PCがまだ戻りません"); }
+    }
+    if (away || locked || lostSince) updateLockCount();
+    if (idleCaution && idleCaution.phase === "pass" && !locked && !away) {
+      var left = idleCaution.at - Date.now();
+      var idleTxt = "注意：しばらく操作がありません。あと" + fmtMS(left) + "でボタンがロックされ、Launch-passが必要になります。";
+      var bn = $("banner");
+      if (bannerKind === "idle" && bn.firstChild && bn.firstChild.nodeType === 3) bn.firstChild.nodeValue = idleTxt; // 続けるボタンを作り直さない（押した瞬間に消えないように）
+      else showBanner(idleTxt, true, "idle");
+    }
+    watchdog();
+  }
+
   // ---------- 警告・終了 ----------
   function showBanner(text, withExtend, kind) {
     var b = $("banner");
@@ -1024,14 +1360,14 @@ input.otp {
     if (withExtend) {
       var btn = document.createElement("button");
       btn.textContent = "続ける";
-      btn.addEventListener("click", function () { post("/api/extend", {}).then(hideBanner, hideBanner); });
+      btn.addEventListener("click", function () { idleCaution = null; post("/api/extend", {}).then(hideBanner, hideBanner); });
       b.appendChild(btn);
     }
     b.className = "on";
   }
   function hideBanner() { $("banner").className = ""; bannerKind = ""; }
   function showWarn(m) {
-    var what = m.kind === "max" ? "最大の接続時間に近づいています" : "しばらく操作がありません";
+    var what = "最大の接続時間に近づいています";
     showBanner(what + "。まもなく自動で切断します。", true, "warn");
   }
 
@@ -1053,6 +1389,7 @@ input.otp {
     // 画面に出ていたボタンの情報は、すべて消す（切断後に操作できない・内容が残らない）
     endPress(false); hideNameTip();
     snap = null; sid = ""; pendingTaps = {}; execBusy = false; execMulti = false; secInfo = null;
+    locked = false; away = null; lostSince = 0; otherTab = false; idleCaution = null; passBuf = "";
     $("grid").innerHTML = ""; $("pageList").innerHTML = "";
     storeDel("lk_sid");
     try { history.replaceState(null, "", "/"); } catch (e) { /* 無視 */ }

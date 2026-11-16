@@ -30,12 +30,23 @@ const TICKET_TTL_MS = 3 * 60 * 1000;    // QRを読み取ってページを開�
 const WAIT_IDLE_MS = 90 * 1000;         // QRを出してから、誰も接続しに来ないまま、この時間たつとLaunch-0を閉じる
 const OTP_MAX_FAILS = 3;                // 間違えてよい回数（QRを出している間の合計。超えたらQRとパスワードを作り直す）
 const APPROVAL_TIMEOUT_MS = 20 * 1000;  // PCの許可待ちの最大時間
-const STALE_AFTER_MS = 120 * 1000;      // これだけ応答が無いと「通信が途切れている」扱い（警告）。スマホ側（mobile.html の STALE_MS）と同じ値にする
-const DROP_AFTER_MS = 360 * 1000;       // これだけ応答が無いと切断（スマホ側の LOST_MS と同じ値）
-const IDLE_LIMIT_MS = 30 * 60 * 1000;   // 無操作で自動切断
+// ---- 時間の方針（v1.2.7）----
+//  通信が途切れている・スマホの画面が裏に回っている：3分でお知らせ、5分で「注意」（自動切断までのカウントダウン付き）、15分を超えると戻ったときにLaunch-passが必要、30分で自動切断。
+//  PCのスリープ・休止・画面ロック：同じ時間割（スマホは自分の時計で数える。PCが寝ている間はPCから送れないため）。
+//  無操作：15分で「注意」（あと何分でLaunch-passが必要になるか）、30分でLaunch-passが必要、60分で自動切断。
+const NOTICE_MS = 3 * 60 * 1000;        // お知らせ（途切れ・裏に回っている）
+const CAUTION_MS = 5 * 60 * 1000;       // 注意（切断までのカウントダウン付き）
+const AWAY_LOCK_MS = 15 * 60 * 1000;    // これを超えて戻ったとき（またはPCの復帰時）は、Launch-passが必要
+const AWAY_LIMIT_MS = 30 * 60 * 1000;   // これを超えたら自動切断
+const STALE_AFTER_MS = NOTICE_MS;       // これだけ応答が無いと「通信が途切れている」扱い（お知らせ）。スマホ側（mobile.html の STALE_MS）と同じ値にする
+const DROP_AFTER_MS = AWAY_LIMIT_MS;    // これだけ応答が無いと切断（30分。スマホ側の LOST_MS と同じ値）
+const IDLE_CAUTION_MS = 15 * 60 * 1000; // 無操作：注意を出す（あとでLaunch-passが必要になるお知らせ）
+const IDLE_LOCK_MS = 30 * 60 * 1000;    // 無操作：この時間を超えると、スマホのボタンが使えなくなり、Launch-passが必要
+const IDLE_LIMIT_MS = 60 * 60 * 1000;   // 無操作で自動切断（60分）
 const MAX_SESSION_MS = 3 * 60 * 60 * 1000; // 最大接続時間
 const WARN_BEFORE_MS = 60 * 1000;       // 自動切断の何ミリ秒前に警告するか
-const HIDDEN_LIMIT_MS = 5 * 60 * 1000;  // スマホの画面が裏に回ったまま、これを超えたら切断
+const HIDDEN_WARN_MS = NOTICE_MS;  // スマホの画面が裏に回ったまま、これを超えたらPC側にお知らせ（3分）
+const HIDDEN_LIMIT_MS = AWAY_LIMIT_MS; // スマホの画面が裏に回ったまま、これを超えたら切断（30分）
 const TAP_MIN_GAP_MS = 100;             // 全ボタン共通の最短間隔
 const TAP_SAME_TILE_GAP_MS = 220;       // 同じボタンの最短間隔
 const TAP_BURST_COUNT = 30;             // 受け付けたタップがこの回数を
@@ -45,6 +56,8 @@ const TAP_ABUSE_LIMIT = 10;             // 「速すぎる」がこの回数に�
 const MAX_INFLIGHT = 3;                 // PCが処理中のタップの最大数
 const EXEC_MAX_MS = 120 * 1000;         // 1つの操作（マルチ操作など）の実行を待つ最大時間。これを過ぎたら、固まったものとして扱う
 const PEER_RECHECK_MS = 5 * 1000;       // Tailscaleモード：接続相手の確認・経路の確認の間隔
+const PEER_FAIL_LIMIT = 3;              // 「確認できなかった」（時間切れ・起動中など一時的な不調）が、この回数連続したら切断（約15秒）。確定した異常（別アカウント・すり替わり・Tailscale停止）は即切断
+const PEER_GRACE_MS = 20 * 1000;        // 一時的に確認できない間でも、直近これだけの間に確認済みの「接続中のスマホ」からの通信は通す
 const MAX_CONN_PER_IP = 12;             // 同じ相手からの同時接続の上限（ブラウザは1つのページで数本つなぐ）
 const MAX_CONN_TOTAL = 64;              // 全体の同時接続の上限
 const REQ_PER_MIN_PER_IP = 600;         // 同じ相手からのリクエストの上限（1分あたり。通常の使用は100未満）
@@ -84,6 +97,32 @@ function isTailnetAddr(raw) {
   return Number(m[1]) === 100 && Number(m[2]) >= 64 && Number(m[2]) <= 127; // 100.64.0.0/10
 }
 
+// ---- Launch-pass（4桁の数字） ----
+// PCで決める。平文では保存せず、ソルト付きハッシュ（scrypt）で保存する。スマホ側の「ロック域」の解除・延長に使う。
+// 間違えた回数は、接続を切って入り直しても引き継ぐ（アプリを終了するまで）。3回連続で間違えたら切断し、5分間は入力を受け付けない。
+const PASS_RE = /^[0-9]{4}$/;
+// スマホ画面（タブ）の識別子：開いた時刻（ミリ秒）-乱数。同じ接続を複数のタブで開いたとき、いちばん新しく開いたタブだけを有効にする。
+const TAB_RE = /^[0-9]{10,16}-[a-z0-9]{4,16}$/;
+function tabNum(t) { return parseInt(String(t).split("-")[0], 10) || 0; }
+const PASS_MAX_FAILS = 3;
+const PASS_COOLDOWN_MS = 5 * 60 * 1000;
+const passState = { fails: 0, lockUntil: 0 };
+function makePassRecord(pass) {
+  if (!PASS_RE.test(String(pass))) throw new Error("bad-pass");
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(String(pass), salt, 32, { N: 16384, r: 8, p: 1 });
+  return { v: 1, salt: salt.toString("hex"), hash: hash.toString("hex") };
+}
+function checkPass(rec, pass) {
+  try {
+    if (!rec || rec.v !== 1 || !/^[0-9a-f]{32}$/.test(String(rec.salt)) || !/^[0-9a-f]{64}$/.test(String(rec.hash))) return false;
+    if (!PASS_RE.test(String(pass))) return false;
+    const got = crypto.scryptSync(String(pass), Buffer.from(rec.salt, "hex"), 32, { N: 16384, r: 8, p: 1 });
+    return crypto.timingSafeEqual(got, Buffer.from(rec.hash, "hex"));
+  } catch (e) { return false; }
+}
+function resetPassState() { passState.fails = 0; passState.lockUntil = 0; } // テスト用
+
 function createRemote(opts) {
   const rawEmit = typeof opts.emit === "function" ? opts.emit : () => {};
   const emit = (evt) => { try { rawEmit(evt); } catch (e) { /* PC側の処理の失敗で通信を止めない */ } };
@@ -121,7 +160,7 @@ function createRemote(opts) {
   // 実行中の操作（seq -> { at, multi }）。接続が終わっても、PCでの実行が終わるまでは残す（Launch-0を閉じる判断に使う）
   const exec = new Map();
   let lastExecSig = "";
-  let peerChecking = false, lastPeerCheck = 0;
+  let peerChecking = false, lastPeerCheck = 0, waitFails = 0;
 
   function now() { return Date.now(); }
 
@@ -248,14 +287,28 @@ function createRemote(opts) {
     const s = session;
     peerChecking = true;
     if (!s) {
-      // 待機中は、Tailscale自体が止まっていないかだけを確認する
-      ts.status().then((st) => { peerChecking = false; if (!session && phase === "waiting" && !st.ok) finish("tailscale-down"); }, () => { peerChecking = false; });
+      // 待機中は、Tailscale自体が止まっていないかだけを確認する（一時的な不調は、連続PEER_FAIL_LIMIT回まで待つ）
+      ts.statusCached().then((st) => {
+        peerChecking = false;
+        if (session || phase !== "waiting") return;
+        if (st.ok) { waitFails = 0; return; }
+        if (st.transient && ++waitFails < PEER_FAIL_LIMIT) return;
+        finish("tailscale-down");
+      }, () => { peerChecking = false; });
       return;
     }
     ts.routeFor(s.ip).then((r) => {
       peerChecking = false;
       if (session !== s) return;
-      if (!r.ok) { finish(r.reason === "tailscale-down" ? "tailscale-down" : "identity"); return; }
+      if (!r.ok) {
+        // 一時的に確認できなかっただけなら、連続PEER_FAIL_LIMIT回までは切らない。確定した異常は今までどおり即切断
+        // PCのスリープ・休止から復帰した直後は、Tailscaleがつながり直すまで待つ（その間は切らない）
+        if (now() < (s.resumeGraceUntil || 0) && (r.transient || r.reason === "tailscale-down")) return;
+        if (r.transient) { s.verifyFails += 1; if (s.verifyFails >= PEER_FAIL_LIMIT) finish("tailscale-down"); return; }
+        finish(r.reason === "tailscale-down" ? "tailscale-down" : "identity");
+        return;
+      }
+      s.verifyFails = 0; s.lastVerifiedAt = now();
       if (s.peerKey && r.key && r.key !== s.peerKey) { finish("identity"); return; } // 同じIPアドレスの端末が入れ替わった
       const path = r.path || { kind: "unknown", detail: "" };
       if (!s.route || s.route.kind !== path.kind || s.route.detail !== path.detail) {
@@ -291,8 +344,9 @@ function createRemote(opts) {
     return {
       sid: randHex(24), ip: addr, ua: String(ua || "").slice(0, 200), peer: peer || null, peerKey: peer && peer.key ? peer.key : "", route: peer && peer.path ? peer.path : null,
       state: "pending", sse: null,
-      createdAt: t, lastSeen: t, lastActivity: t, approvalDeadline: t + APPROVAL_TIMEOUT_MS,
-      hiddenSince: 0, paused: false, stalled: false,
+      createdAt: t, lastSeen: t, lastActivity: t, approvalDeadline: t + APPROVAL_TIMEOUT_MS, lastVerifiedAt: t, verifyFails: 0,
+      hiddenSince: 0, hiddenWarned: false, paused: false, stalled: false,
+      tabId: "", needPass: false, lockWhy: "", away: null, cautioned: false, idlePhase: "", resumeGraceUntil: 0,
       seqLast: 0, lastTapAt: 0, tileLast: new Map(), tapTimes: [], attempts: [], abuse: 0,
       page: 0, warned: { idle: false, max: false }, maxDeadline: 0,
     };
@@ -306,6 +360,30 @@ function createRemote(opts) {
       idleLeft: s ? Math.max(0, Math.round((IDLE_LIMIT_MS - (t - s.lastActivity)) / 1000)) : 0,
       maxLeft: s && s.maxDeadline ? Math.max(0, Math.round((s.maxDeadline - t) / 1000)) : 0,
     };
+  }
+  // スマホに渡す「操作画面の最初の状態」（Launch-passが必要か・PCがスリープ/ロック中か）
+  function readyPayload(s) {
+    return {
+      type: "ready", snapshot: JSON.parse(snapshotJson), paused: s.paused, page: s.page, seq: s.seqLast, mode, info: infoPayload(s), exec: { busy: exec.size > 0, multi: multiRunning() },
+      locked: !!s.needPass, lockWhy: s.lockWhy || "", away: s.away ? { kind: s.away.kind, ago: Math.max(0, Math.round((now() - s.away.since) / 1000)) } : null, passLeft: Math.max(0, PASS_MAX_FAILS - passState.fails),
+    };
+  }
+  // Launch-passが必要な状態にする（スマホのボタンを使えなくする）。理由：idle（無操作）/ hidden / stalled / pc-sleep / pc-lock
+  function setLocked(s, why) {
+    if (!s || s.needPass) return;
+    s.needPass = true; s.lockWhy = String(why || "");
+    toPhone({ type: "locked", why: s.lockWhy, passLeft: Math.max(0, PASS_MAX_FAILS - passState.fails) });
+    emit({ type: "locked", why: s.lockWhy });
+  }
+  // Launch-passが通った（またはPCで「このまま続ける」を押した）：すべての時計を戻す
+  function unlockSession(s) {
+    const t = now();
+    if (s.stalled) emit({ type: "resumed" });
+    if (s.hiddenWarned) emit({ type: "hidden-end" });
+    s.needPass = false; s.lockWhy = ""; s.lastActivity = t; s.lastSeen = t; s.hiddenSince = 0; s.hiddenWarned = false; s.stalled = false; s.cautioned = false; s.idlePhase = ""; s.warned.idle = false;
+    toPhone({ type: "unlocked" });
+    emit({ type: "unlocked" });
+    emit({ type: "caution-end" });
   }
   // 接続中（またはPC側の都合）の終了。サーバーはそのままだが、このあとLaunch-0側が全体を閉じる。
   function finish(reason, notifyPhone) {
@@ -355,6 +433,18 @@ function createRemote(opts) {
     return session;
   }
 
+  // 同じ接続を、スマホの複数のタブで開いたとき：いちばん新しく開いたタブ（events に tab を付けて来たもの）だけが有効。
+  // 古いタブからの要求は断る（接続は切らない。古いタブは「別のタブで開かれました」と表示して、通信を止める）。
+  // takeover＝true（events の開始）のときだけ、新しいタブが、いまのタブから引き継げる。
+  function claimTab(res, s, tab, takeover) {
+    const t = typeof tab === "string" && TAB_RE.test(tab) ? tab : "";
+    if (!s.tabId) { s.tabId = t; return true; }
+    if (t && t === s.tabId) return true;
+    if (t && takeover && tabNum(t) > tabNum(s.tabId)) { s.tabId = t; return true; }
+    json(res, 409, { ok: false, error: "othertab" });
+    return false;
+  }
+
   function readBody(req, res, cb) {
     const ct = String(req.headers["content-type"] || "");
     if (!/^application\/json/i.test(ct)) { json(res, 415, { ok: false, error: "type" }); return; }
@@ -385,9 +475,19 @@ function createRemote(opts) {
       if (tooManyRequests(addr)) { res.writeHead(429, { "Retry-After": "30" }); res.end(); return; }
       // Tailscaleモード：このPCと同じアカウントの端末だけを通す（確認できなければ断る＝安全側）
       if (!ts) { res.writeHead(403); res.end(); return; }
-      ts.peerFor(addr).then((r) => {
+      ts.peerFor(addr).then((r0) => {
         try {
-          if (!r.ok) { reportRejected(addr, r.reason); res.writeHead(403); res.end(); return; }
+          let r = r0;
+          const cur = session;
+          if (!r.ok && r.transient && cur && cur.state !== "pending" && addr === cur.ip && (now() - cur.lastVerifiedAt < PEER_GRACE_MS || now() < (cur.resumeGraceUntil || 0))) {
+            // 確認が一時的にできないだけで、直近に確認済みの「接続中のスマホ」からの通信は通す（ほかの相手は今までどおり断る）
+            r = { ok: true, key: cur.peerKey };
+          } else if (!r.ok) {
+            if (!r.transient) reportRejected(addr, r.reason); // 一時的な不調は「知らない端末を拒否」の通知にしない
+            res.writeHead(403); res.end(); return;
+          } else if (session && addr === session.ip) {
+            session.lastVerifiedAt = now();
+          }
           handleInner(req, res, r);
         } catch (e) {
           try { if (!res.headersSent) res.writeHead(400); res.end(); } catch (e2) { /* 無視 */ }
@@ -444,6 +544,7 @@ function createRemote(opts) {
     if (req.method === "GET" && p === "/api/events") {
       const s = getSession(req, res, u.searchParams.get("sid"));
       if (!s) return;
+      if (!claimTab(res, s, u.searchParams.get("tab"), true)) return;
       if (s.sse) { try { s.sse.end(); } catch (e) { /* 無視 */ } }
       res.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
@@ -456,7 +557,7 @@ function createRemote(opts) {
       if (!s.stalled) s.lastSeen = now(); // 途切れ中は、再接続だけでは「生きている」とみなさない（/api/ping が届いてから再開する）
       req.on("close", () => { if (session === s && s.sse === res) s.sse = null; });
       if (s.state === "pending") sseWrite(res, { type: "pending" });
-      else sseWrite(res, { type: "ready", snapshot: JSON.parse(snapshotJson), paused: s.paused, page: s.page, seq: s.seqLast, mode, info: infoPayload(s), exec: { busy: exec.size > 0, multi: multiRunning() } });
+      else sseWrite(res, readyPayload(s));
       return;
     }
 
@@ -517,11 +618,14 @@ function createRemote(opts) {
       return readBody(req, res, (b) => {
         const s = getSession(req, res, req.headers["x-sid"]);
         if (!s) return;
+        if (!claimTab(res, s, req.headers["x-tab"], false)) return;
         // 通信が途切れている間（stalled）は、操作を受け付けない。/api/ping が届いて、つながりが戻ってから再開する。
         // （途切れ中に、セッションIDだけを使って操作されることを防ぐ。lastSeen も更新しない）
         if (s.stalled) return json(res, 409, { ok: false, error: "stalled" });
         s.lastSeen = now();
         if (s.state !== "active") return json(res, 409, { ok: false, error: "state" });
+        if (s.away) return json(res, 409, { ok: false, error: "pcaway" }); // PCがスリープ・ロック中は、操作を受け付けない
+        if (s.needPass) return json(res, 409, { ok: false, error: "locked" }); // Launch-passが通るまで、操作を受け付けない
         const tile = typeof b.tile === "string" ? b.tile : "";
         // 連番は正の整数で、前回からの増え方が常識的な範囲のものだけ受け付ける（極端な値で、以後の操作が全部断られるのを防ぐ）
         const seq = Number.isSafeInteger(b.seq) && b.seq > 0 && b.seq <= s.seqLast + 10000 ? b.seq : -1;
@@ -566,12 +670,15 @@ function createRemote(opts) {
       return readBody(req, res, (b) => {
         const s = getSession(req, res, req.headers["x-sid"]);
         if (!s) return;
+        if (!claimTab(res, s, req.headers["x-tab"], false)) return;
         s.lastSeen = now();
         if (s.stalled) { s.stalled = false; emit({ type: "resumed" }); }
         const hidden = b.hidden === true;
         if (hidden && !s.hiddenSince) s.hiddenSince = now();
-        if (!hidden) s.hiddenSince = 0;
-        return json(res, 200, { ok: true, paused: s.paused, state: s.state });
+        if (!hidden) { s.hiddenSince = 0; if (s.hiddenWarned) { s.hiddenWarned = false; emit({ type: "hidden-end" }); } }
+        // つながりが戻って、途切れ・裏に回っていた時間が注意の段階に入っていたら、PCの注意の表示を消す
+        if (s.cautioned && !s.stalled && !s.hiddenSince) { s.cautioned = false; emit({ type: "caution-end" }); }
+        return json(res, 200, { ok: true, paused: s.paused, state: s.state, locked: !!s.needPass, lockWhy: s.lockWhy || "", away: s.away ? { kind: s.away.kind, ago: Math.max(0, Math.round((now() - s.away.since) / 1000)) } : null });
       });
     }
 
@@ -579,9 +686,11 @@ function createRemote(opts) {
       return readBody(req, res, (b) => {
         const s = getSession(req, res, req.headers["x-sid"]);
         if (!s) return;
+        if (!claimTab(res, s, req.headers["x-tab"], false)) return;
         if (s.stalled) return json(res, 409, { ok: false, error: "stalled" }); // 途切れ中は、画面の切り替えも受け付けない（lastSeen も更新しない）
         s.lastSeen = now();
         if (s.state !== "active") return json(res, 409, { ok: false });
+        if (s.away || s.needPass) return json(res, 409, { ok: false, error: s.away ? "pcaway" : "locked" });
         const n = Number.isInteger(b.page) ? b.page : -1;
         if (n < 0 || n > 20) return json(res, 400, { ok: false });
         s.page = n; s.lastActivity = now(); s.warned.idle = false;
@@ -594,7 +703,39 @@ function createRemote(opts) {
       return readBody(req, res, () => {
         const s = getSession(req, res, req.headers["x-sid"]);
         if (!s) return;
+        if (!claimTab(res, s, req.headers["x-tab"], false)) return;
+        // ロック域（Launch-passが必要な状態）では、スマホからの「続ける」は受け付けない（/api/unlock で解除する）
+        if (s.needPass || s.away) return json(res, 403, { ok: false, error: s.away ? "pcaway" : "locked" });
         extend();
+        return json(res, 200, { ok: true });
+      });
+    }
+
+    // Launch-pass（4桁）の入力。通れば、ロックを解除して時計を戻す。3回連続で間違えたら切断し、5分間は受け付けない。
+    if (p === "/api/unlock") {
+      return readBody(req, res, (b) => {
+        const s = getSession(req, res, req.headers["x-sid"]);
+        if (!s) return;
+        if (!claimTab(res, s, req.headers["x-tab"], false)) return;
+        if (s.state !== "active") return json(res, 409, { ok: false, error: "state" });
+        if (s.away) return json(res, 409, { ok: false, error: "pcaway" });
+        const t = now();
+        if (passState.lockUntil && t >= passState.lockUntil) { passState.lockUntil = 0; passState.fails = 0; }
+        if (passState.lockUntil && t < passState.lockUntil) return json(res, 429, { ok: false, error: "cooldown", left: Math.ceil((passState.lockUntil - t) / 1000) });
+        const rec = typeof opts.getPass === "function" ? opts.getPass() : null;
+        const given = typeof b.pass === "string" ? b.pass : "";
+        if (!rec || !checkPass(rec, given)) {
+          passState.fails += 1;
+          emit({ type: "pass-fail", count: passState.fails, max: PASS_MAX_FAILS });
+          if (passState.fails >= PASS_MAX_FAILS) {
+            passState.lockUntil = t + PASS_COOLDOWN_MS;
+            json(res, 403, { ok: false, error: "pass", left: 0, ended: true });
+            return finish("pass-fails");
+          }
+          return json(res, 403, { ok: false, error: "pass", left: PASS_MAX_FAILS - passState.fails });
+        }
+        passState.fails = 0;
+        unlockSession(s);
         return json(res, 200, { ok: true });
       });
     }
@@ -603,6 +744,7 @@ function createRemote(opts) {
       return readBody(req, res, () => {
         const s = getSession(req, res, req.headers["x-sid"]);
         if (!s) return;
+        if (!claimTab(res, s, req.headers["x-tab"], false)) return;
         // 操作の実行中は、それが終わるまで切断できない（PCで途中まで実行された状態で止まらないように）
         if (s.state === "active" && isBusy()) { emit({ type: "disconnect-refused", from: "phone" }); return json(res, 200, { ok: false, error: "busy" }); }
         json(res, 200, { ok: true });
@@ -634,17 +776,50 @@ function createRemote(opts) {
       if (t > s.approvalDeadline) dropPending("approval-timeout");
       return;
     }
+    // PCがスリープ・休止・画面ロックの間は、スマホからは操作できない。時間だけ数える。
+    // （画面ロックはPCが動いているので、ここで30分を数える。スリープ中はこの処理自体が止まるため、復帰したとき pcBack() が計算する）
+    if (s.away) {
+      if (t - s.away.since > AWAY_LIMIT_MS) return finish(s.away.kind === "lock" ? "pc-lock" : "pc-sleep");
+      if (t - lastInfoAt >= 5000) { lastInfoAt = t; toPhone({ type: "info", info: infoPayload(s) }); }
+      if (s.sse) { try { s.sse.write(": ping\n\n"); } catch (e) { s.sse = null; } }
+      return;
+    }
     // 通信状態
     const silent = t - s.lastSeen;
-    if (silent > DROP_AFTER_MS) return finish("timeout", false);
-    if (silent > STALE_AFTER_MS && !s.stalled) { s.stalled = true; emit({ type: "stalled" }); }
+    // 画面が裏に回ったままの切断を先に判定する（裏に回ると応答も止まるので、同じ30分でも、本当の理由「phone-hidden」を先に返すため）
     if (s.hiddenSince && t - s.hiddenSince > HIDDEN_LIMIT_MS) return finish("phone-hidden");
+    if (silent > DROP_AFTER_MS) return finish("timeout", false);
+    // 途切れ・裏に回っている時間（長いほう）。since＝その始まり、dropAt＝このまま続いたときに切断する時刻
+    const gapMs = Math.max(s.hiddenSince ? t - s.hiddenSince : 0, silent);
+    const gapSince = t - gapMs;
+    const gapKind = s.hiddenSince && t - s.hiddenSince >= silent ? "hidden" : "stalled";
+    // 3分：お知らせ（PCの画面に表示）
+    if (silent > STALE_AFTER_MS && !s.stalled) { s.stalled = true; emit({ type: "stalled", since: s.lastSeen, dropAt: s.lastSeen + DROP_AFTER_MS }); }
+    if (s.hiddenSince && t - s.hiddenSince > HIDDEN_WARN_MS && !s.hiddenWarned) { s.hiddenWarned = true; emit({ type: "hidden", since: s.hiddenSince, dropAt: s.hiddenSince + HIDDEN_LIMIT_MS }); }
+    // 5分：注意（自動で切断するまでのカウントダウン付き）
+    if (gapMs >= CAUTION_MS && !s.cautioned) { s.cautioned = true; emit({ type: "caution", kind: gapKind, since: gapSince, dropAt: gapSince + AWAY_LIMIT_MS, phase: "cut" }); }
+    // 15分：戻ったときにLaunch-passが必要（先に印を付けておく。スマホは戻ったとき、入力画面になる）
+    if (gapMs >= AWAY_LOCK_MS && !s.needPass) setLocked(s, gapKind);
     // 無操作・最大時間
-    const idleLeft = IDLE_LIMIT_MS - (t - s.lastActivity);
+    const idleMs = t - s.lastActivity;
     const maxLeft = s.maxDeadline - t;
-    if (idleLeft <= 0) return finish("idle");
+    if (idleMs >= IDLE_LIMIT_MS) return finish("idle");
     if (maxLeft <= 0) return finish("maxtime");
-    if (idleLeft <= WARN_BEFORE_MS && !s.warned.idle) { s.warned.idle = true; const secs = Math.ceil(idleLeft / 1000); emit({ type: "warn", kind: "idle", secs }); toPhone({ type: "warn", kind: "idle", secs }); }
+    // 30分：スマホのボタンを使えなくして、Launch-passを求める
+    if (idleMs >= IDLE_LOCK_MS && !s.needPass) setLocked(s, "idle");
+    // 15分から：注意。30分までは「あと◯分でLaunch-passが必要になります」、そのあとは「あと◯分で自動的に切断します」
+    if (idleMs >= IDLE_CAUTION_MS) {
+      const phase = s.needPass ? "cut" : "pass";
+      if (s.idlePhase !== phase) {
+        s.idlePhase = phase;
+        const left = phase === "pass" ? IDLE_LOCK_MS - idleMs : IDLE_LIMIT_MS - idleMs;
+        const ev = { type: "idle-caution", phase, secs: Math.max(0, Math.ceil(left / 1000)), at: t + left };
+        emit(ev); toPhone(ev);
+      }
+    } else if (s.idlePhase) {
+      s.idlePhase = "";
+      emit({ type: "caution-end" }); toPhone({ type: "caution-end" });
+    }
     if (maxLeft <= WARN_BEFORE_MS && !s.warned.max) { s.warned.max = true; const secs = Math.ceil(maxLeft / 1000); emit({ type: "warn", kind: "max", secs }); toPhone({ type: "warn", kind: "max", secs }); }
     // スマホの「接続の安全」表示の更新（5秒ごと）
     if (t - lastInfoAt >= 5000) { lastInfoAt = t; toPhone({ type: "info", info: infoPayload(s) }); }
@@ -655,6 +830,8 @@ function createRemote(opts) {
   // ---------- 外から呼ぶ操作 ----------
   async function start(args) {
     if (server) throw new Error("already running");
+    // Launch-passが決まっていなければ、スマホとの接続は始められない
+    if (!(typeof opts.getPass === "function" && opts.getPass())) throw new Error("no-pass");
     let bindAddr;
     let tsInfo = null;
     if (!ts) throw new Error("tailscale-unavailable");
@@ -666,7 +843,7 @@ function createRemote(opts) {
     tsInfo = { selfName: st.selfName, login: st.login, display: st.display, tailnet: st.tailnet };
     pcName = String(st.selfName || "").slice(0, 60);
     lastEnded = null;
-    exec.clear(); lastExecSig = "false:false:0"; lastPeerCheck = 0; reqLog.clear();
+    exec.clear(); lastExecSig = "false:false:0"; lastPeerCheck = 0; waitFails = 0; reqLog.clear();
     snapshotJson = JSON.stringify(args.snapshot || {});
     allowedIds = new Set(Array.isArray(args.allowedIds) ? args.allowedIds.filter((x) => SAFE_ID_RE.test(String(x))).map(String) : []);
     multiIds = new Set((Array.isArray(args.multiIds) ? args.multiIds : []).map(String).filter((x) => allowedIds.has(x)));
@@ -722,7 +899,7 @@ function createRemote(opts) {
     session.state = "active";
     session.lastSeen = t; session.lastActivity = t; session.maxDeadline = t + MAX_SESSION_MS;
     phase = "active";
-    toPhone({ type: "ready", snapshot: JSON.parse(snapshotJson), paused: false, page: session.page, seq: session.seqLast, mode, info: infoPayload(session), exec: { busy: exec.size > 0, multi: multiRunning() } });
+    toPhone(readyPayload(session));
     lastExecSig = execSig(); // "ready" にすでに実行状態を含めたので、同じ内容を重ねて送らない
     emit({ type: "connected", ip: session.ip, ua: session.ua, since: t, mode, peer: publicPeer(session.peer), route: session.route });
     return true;
@@ -735,10 +912,44 @@ function createRemote(opts) {
   function extend() {
     if (!session || session.state !== "active") return;
     const t = now();
-    session.lastActivity = t; session.warned.idle = false;
+    if (session.needPass) unlockSession(session); // PCで「このまま続ける」を押したときは、PCの前に人がいるので、ロックも解除する
+    if (session.idlePhase) { session.idlePhase = ""; emit({ type: "caution-end" }); toPhone({ type: "caution-end" }); }
+    session.lastActivity = t; session.warned.idle = false; session.idlePhase = "";
     if (session.maxDeadline - t < MAX_SESSION_MS) { session.maxDeadline = t + MAX_SESSION_MS; session.warned.max = false; }
     toPhone({ type: "extended" });
     emit({ type: "extended" });
+  }
+  // PCがスリープ・休止・画面ロックに入った／戻った。切断はしない（スマホは操作できなくなり、時間だけ数える）。
+  // kind: "sleep"（スリープ・休止）／"lock"（画面ロック）
+  function pcAway(kind) {
+    const s = session;
+    if (!s || s.state !== "active" || s.away) return false;
+    s.away = { kind: kind === "lock" ? "lock" : "sleep", since: now() };
+    toPhone({ type: "pcaway", kind: s.away.kind, notice: NOTICE_MS / 1000, caution: CAUTION_MS / 1000, lock: AWAY_LOCK_MS / 1000, limit: AWAY_LIMIT_MS / 1000 });
+    emit({ type: "pcaway", kind: s.away.kind, since: s.away.since, dropAt: s.away.since + AWAY_LIMIT_MS });
+    return true;
+  }
+  function pcBack() {
+    const s = session;
+    if (!s || !s.away) return false;
+    const t = now();
+    const was = s.away;
+    const dur = t - was.since;
+    s.away = null;
+    // 30分を超えていたら切断（スマホ側でもすでに切断している）
+    if (dur > AWAY_LIMIT_MS) { finish(was.kind === "lock" ? "pc-lock" : "pc-sleep"); return true; }
+    // スリープ・ロックの間は、無操作・途切れ・裏に回っている時間に数えない
+    s.lastActivity = Math.min(t, s.lastActivity + dur);
+    s.lastSeen = t; s.stalled = false; s.cautioned = false; s.idlePhase = "";
+    if (s.hiddenSince) s.hiddenSince = Math.min(t, s.hiddenSince + dur);
+    s.lastVerifiedAt = t; s.verifyFails = 0; lastPeerCheck = 0;
+    s.resumeGraceUntil = t + 60 * 1000; // Tailscaleがつながり直すまで、確認の失敗で切らない
+    // 15分以上たっていたら、Launch-passが必要
+    if (dur >= AWAY_LOCK_MS) setLocked(s, was.kind === "lock" ? "pc-lock" : "pc-sleep");
+    toPhone({ type: "pcback", locked: !!s.needPass, lockWhy: s.lockWhy || "", passLeft: Math.max(0, PASS_MAX_FAILS - passState.fails) });
+    emit({ type: "pcback", locked: !!s.needPass });
+    emit({ type: "caution-end" });
+    return true;
   }
   function tapResult(seq, ok, msg) {
     // 接続がすでに終わっていても、PCでの実行が終わったことは記録する（Launch-0を閉じてよいかの判断に使う）
@@ -768,11 +979,11 @@ function createRemote(opts) {
   function status() {
     return {
       running: !!server, phase, ip, port, mode, busy: isBusy(),
-      session: session ? { state: session.state, ip: session.ip, paused: session.paused, page: session.page, stalled: session.stalled } : null,
+      session: session ? { state: session.state, ip: session.ip, paused: session.paused, page: session.page, stalled: session.stalled, locked: !!session.needPass, away: session.away ? session.away.kind : "" } : null,
     };
   }
 
-  return { start, approve, pause, extend, tapResult, pushState, disconnect, shutdown, status, isBusy, refreshCredentials: () => { if (phase === "waiting") renewAll("manual"); } };
+  return { start, approve, pause, extend, pcAway, pcBack, tapResult, pushState, disconnect, shutdown, status, isBusy, refreshCredentials: () => { if (phase === "waiting") renewAll("manual"); } };
 }
 
-module.exports = { createRemote, isTailnetAddr, OTP_TTL_MS, OTP_GRACE_MS, WAIT_IDLE_MS, APPROVAL_TIMEOUT_MS, OTP_MAX_FAILS };
+module.exports = { createRemote, isTailnetAddr, makePassRecord, checkPass, resetPassState, PASS_RE, PASS_MAX_FAILS, PASS_COOLDOWN_MS, NOTICE_MS, CAUTION_MS, AWAY_LOCK_MS, AWAY_LIMIT_MS, IDLE_CAUTION_MS, IDLE_LOCK_MS, IDLE_LIMIT_MS, OTP_TTL_MS, OTP_GRACE_MS, WAIT_IDLE_MS, APPROVAL_TIMEOUT_MS, OTP_MAX_FAILS };

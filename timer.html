@@ -89,6 +89,9 @@
   }
   .main-btn.start { background: var(--accent); color: var(--accent-contrast); }
   .main-btn.stop { background: var(--panel-alt); color: var(--text); border: 1px solid var(--border); }
+  .main-btn.act { background: var(--panel-alt); color: var(--text); border: 1px solid var(--border); }
+  .main-btn.act:disabled { opacity: 0.35; cursor: default; }
+  .menu-body { overflow-x: hidden; }
 
   .dismiss-btn {
     display: none; margin-top: 4px; padding: 8px 18px; border-radius: 10px; border: none;
@@ -255,6 +258,7 @@
       <span class="label">⏱ タイマー</span>
       <div class="btns">
         <div class="icon-btn active" id="lockBtn" title="常に最前面に表示（既定でオン）">🔒</div>
+        <div class="icon-btn" id="minBtn" title="最小化">－</div>
         <div class="icon-btn" id="menuBtn" title="メニュー">☰</div>
         <div class="icon-btn close-btn" id="closeBtn" title="閉じる">✕</div>
       </div>
@@ -263,15 +267,11 @@
       <div class="active-name" id="activeNameEl"></div>
       <div class="time-display" id="timeDisplay">05:00</div>
       <div class="mt-quick-row" id="mtQuickRow"></div>
-      <div class="adjust-row" id="adjustRow">
-        <div class="adjust-btn" id="adjustMinus">－1分</div>
-        <div class="adjust-btn" id="adjustMinusSec" title="30秒減らす">－30秒</div>
-        <div class="adjust-btn" id="adjustPlusSec" title="30秒増やす">＋30秒</div>
-        <div class="adjust-btn" id="adjustPlus">＋1分</div>
-      </div>
       <div class="controls">
+        <button class="main-btn act" id="prevActBtn" title="ひとつ前のactに戻る" style="display:none;">⏮</button>
         <button class="main-btn start" id="startBtn" title="開始／一時停止">▶</button>
         <button class="main-btn stop" id="resetBtn" title="停止してリセット（今のtimeを最初からやり直します）">⏹</button>
+        <button class="main-btn act" id="nextActBtn" title="次のactに進む" style="display:none;">⏭</button>
       </div>
       <div class="confirm-row" id="confirmRow">
         本当にリセットしますか？
@@ -282,7 +282,7 @@
     </div>
   </div>
 
-  <!-- ハンバーガーメニュー：時間の直接編集・クイック調整の単位・マルチタイマー -->
+  <!-- ハンバーガーメニュー：時間の直接編集・マルチタイマー -->
   <div class="menu-overlay" id="menuOverlay">
     <div class="menu-panel">
       <div class="menu-header">
@@ -297,17 +297,6 @@
           <input type="number" id="editS" min="0" max="59" value="0" /><span>秒</span>
         </div>
         <div class="field-row"><button class="apply-btn" id="applyEditBtn">この時間に変更</button></div>
-
-        <div class="menu-section-title">クイック調整ボタンの単位（画面の±ボタン）</div>
-        <div class="field-row">
-          <input type="number" id="quickAmount" min="1" max="999" value="1" />
-          <select id="quickUnit">
-            <option value="sec">秒</option>
-            <option value="min" selected>分</option>
-            <option value="hour">時間</option>
-          </select>
-          <button class="apply-btn" id="applyQuickBtn">適用</button>
-        </div>
 
         <div class="menu-section-title">アラーム</div>
         <div class="field-row">
@@ -359,7 +348,6 @@
   let audioCtx = null;
   let locked = true; // ロックは既定でオン
   let activeName = "";
-  let quickStep = { amount: 1, unit: "min" }; // 画面の±ボタンで増減する単位
   let muted = false; // アラーム音を消すか（オンでも見た目の点滅・「音を止める」表示は継続）
 
   // ---- マルチタイマー（グループ最大4つ、各グループにact最大15個） ----
@@ -496,10 +484,7 @@
         if (Array.isArray(old) && old.length) multiGroups[0].acts = old.slice(0, 15);
       }
     } catch (e) { /* keep default */ }
-    try {
-      const q = JSON.parse(localStorage.getItem("timerQuickStep") || "null");
-      if (q && q.amount && q.unit) quickStep = q;
-    } catch (e) { /* keep default */ }
+    try { localStorage.removeItem("timerQuickStep"); } catch (e) { /* 以前の「クイック調整の単位」は廃止した */ }
     try {
       const t = JSON.parse(localStorage.getItem("timerTheme") || "null");
       if (t && t.mode) theme = { mode: t.mode, accent: t.accent || "#6c8bff" };
@@ -509,7 +494,6 @@
     } catch (e) { /* keep default */ }
   }
   function saveMultiGroups() { localStorage.setItem("timerMultiGroups", JSON.stringify(multiGroups)); renderMtQuickRow(); }
-  function saveQuickStep() { localStorage.setItem("timerQuickStep", JSON.stringify(quickStep)); }
   function saveTheme() { localStorage.setItem("timerTheme", JSON.stringify(theme)); }
   function saveMuted() { localStorage.setItem("timerMuted", JSON.stringify(muted)); }
 
@@ -522,10 +506,6 @@
   const lockBtn = document.getElementById("lockBtn");
   const closeBtn = document.getElementById("closeBtn");
   const confirmRow = document.getElementById("confirmRow");
-  const adjustMinus = document.getElementById("adjustMinus");
-  const adjustPlus = document.getElementById("adjustPlus");
-  const adjustMinusSec = document.getElementById("adjustMinusSec");
-  const adjustPlusSec = document.getElementById("adjustPlusSec");
   const menuBtn = document.getElementById("menuBtn");
   const menuOverlay = document.getElementById("menuOverlay");
   const menuCloseBtn = document.getElementById("menuCloseBtn");
@@ -545,13 +525,6 @@
     const sec = Math.floor(s % 60).toString().padStart(2, "0");
     return h > 0 ? `${h}:${m}:${sec}` : `${m}:${sec}`;
   }
-  function renderQuickButtons() {
-    const label = `${quickStep.amount}${UNIT_LABEL[quickStep.unit] || "分"}`;
-    adjustMinus.textContent = "－" + label;
-    adjustPlus.textContent = "＋" + label;
-    adjustMinus.title = label + "減らす";
-    adjustPlus.title = label + "増やす";
-  }
   function render() {
     timeDisplay.textContent = formatTime(remaining);
     if (session && session.awaitingAdvance) {
@@ -562,6 +535,14 @@
       startBtn.title = "開始／一時停止";
     }
     activeNameEl.textContent = activeName;
+    // マルチタイマーの実行中だけ、「ひとつ前のtimeへ」「次のtimeへ」を出す
+    const prevActBtn = document.getElementById("prevActBtn"), nextActBtn = document.getElementById("nextActBtn");
+    if (prevActBtn && nextActBtn) {
+      const multi = !!session;
+      prevActBtn.style.display = multi ? "" : "none";
+      nextActBtn.style.display = multi ? "" : "none";
+      if (multi) prevActBtn.disabled = session.actIndex <= 0;
+    }
   }
 
   function tick() {
@@ -605,12 +586,6 @@
     renderMtQuickRow(); // 実行中のactが変わったので、クイック起動ボタンのツールチップも更新する
     startTimer();
   }
-  function adjust(delta) {
-    remaining = Math.max(0, remaining + delta);
-    totalSeconds = Math.max(totalSeconds, remaining);
-    if (ringing) stopAlarm();
-    render();
-  }
 
   // ---- 鳴動（Web Audioでビープ音を生成。音声ファイルを同梱する必要がない） ----
   function beepOnce() {
@@ -650,7 +625,7 @@
   function activateCurrentAct() {
     const group = multiGroups[session.groupIndex];
     const act = group.acts[session.actIndex];
-    const label = `${group.name} ・ ${act.name || ("time" + (session.actIndex + 1))} (${session.actIndex + 1}/${group.acts.length})`;
+    const label = `${group.name} ・ ${act.name || ("act" + (session.actIndex + 1))} (${session.actIndex + 1}/${group.acts.length})`;
     setTimer(toSeconds(act.amount, act.unit), label);
   }
   function advanceMultiTimer() {
@@ -705,6 +680,41 @@
     running ? pauseTimer() : startTimer();
   });
 
+  // ⏮ ひとつ前のactに戻る／⏭ 次のactに進む（マルチタイマーの実行中）
+  document.getElementById("prevActBtn").addEventListener("click", () => {
+    if (!session || session.actIndex <= 0) return;
+    session.actIndex -= 1;
+    session.awaitingAdvance = false;
+    activateCurrentAct();
+  });
+  document.getElementById("nextActBtn").addEventListener("click", () => {
+    if (!session) return;
+    advanceMultiTimer(); // 最後のtimeで押したときは「すべて完了」になる
+  });
+  // Enterキー：タイマー画面では「開始／一時停止」。ハンバーガーメニューの中では、入力欄の内容を決定する。
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.isComposing || e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    const el = document.activeElement;
+    const tag = el ? el.tagName : "";
+    // 上書きの確認が出ているとき：Enterは「上書きして開始」
+    if (overwriteOverlay.classList.contains("show")) { e.preventDefault(); e.stopPropagation(); document.getElementById("overwriteYes").click(); return; }
+    // ハンバーガーメニューを開いているとき
+    if (document.getElementById("menuOverlay").classList.contains("show")) {
+      const isField = (tag === "INPUT" && el.type !== "checkbox" && el.type !== "button") || tag === "SELECT";
+      if (!isField) return; // ボタンは、標準のEnterで押せる
+      e.preventDefault(); e.stopPropagation();
+      if (el.id === "editH" || el.id === "editM" || el.id === "editS") { document.getElementById("applyEditBtn").click(); return; } // 時間の編集：「この時間に変更」
+      el.blur(); // グループ名・actの名前や時間など：入力を確定する（欄を離れたときに保存される）
+      return;
+    }
+    // タイマー画面：Enterで開始／一時停止（どのボタンにフォーカスがあっても同じ）
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    e.preventDefault(); e.stopPropagation();
+    document.getElementById("startBtn").click();
+  }, true);
+  // 最小化
+  document.getElementById("minBtn").addEventListener("click", () => window.timerApi.minimize());
+
   // ⏹（停止してリセット）は押し間違い防止のため、確認をはさむ
   resetBtn.addEventListener("click", () => { confirmRow.classList.add("show"); });
   document.getElementById("confirmYes").addEventListener("click", () => {
@@ -716,10 +726,6 @@
   });
 
   dismissBtn.addEventListener("click", () => { stopAlarm(); doResetNow(); });
-  adjustMinus.addEventListener("click", () => adjust(-toSeconds(quickStep.amount, quickStep.unit)));
-  adjustPlus.addEventListener("click", () => adjust(toSeconds(quickStep.amount, quickStep.unit)));
-  adjustMinusSec.addEventListener("click", () => adjust(-30));
-  adjustPlusSec.addEventListener("click", () => adjust(30));
 
   lockBtn.addEventListener("click", () => {
     locked = !locked;
@@ -737,8 +743,6 @@
     document.getElementById("editH").value = h;
     document.getElementById("editM").value = m;
     document.getElementById("editS").value = s;
-    document.getElementById("quickAmount").value = quickStep.amount;
-    document.getElementById("quickUnit").value = quickStep.unit;
     muteCheckbox.checked = muted;
     renderGroupTabs();
     renderGroupEditor();
@@ -761,14 +765,6 @@
       activeName = "";
       setTimer(total);
     });
-  });
-
-  document.getElementById("applyQuickBtn").addEventListener("click", () => {
-    const amount = Math.max(1, parseInt(document.getElementById("quickAmount").value, 10) || 1);
-    const unit = document.getElementById("quickUnit").value;
-    quickStep = { amount, unit };
-    saveQuickStep();
-    renderQuickButtons();
   });
 
   muteCheckbox.addEventListener("change", () => {
@@ -821,23 +817,24 @@
 
   // メニューを開かなくても、時間表示の下から直接マルチタイマーを開始できるようにする
   // （actが1つも登録されていないグループは表示しない。最大4グループ＝最大4個を横並び）
-  // ホバー時のツールチップには、グループ名・今の実行状況・先頭最大4件のtime（名前と時間）を表示する。
+  // ホバー時のツールチップには、一番上に「いま実行中のtime」、その下にtimeの一覧（名前と時間）を表示する。
   function buildMtTooltip(groupIndex) {
     const group = multiGroups[groupIndex];
-    const lines = [group.name];
+    const lines = [];
+    // 一番上：いま実行中のtime（動いていなければ「停止中」）
     if (session && session.groupIndex === groupIndex) {
       const act = group.acts[session.actIndex];
-      const actLabel = (act && act.name) || `time${session.actIndex + 1}`;
-      lines.push(`実行中：${actLabel}（${session.actIndex + 1}/${group.acts.length}）`);
+      const actLabel = (act && act.name) || `act${session.actIndex + 1}`;
+      lines.push(`実行中：${group.name} ・ ${actLabel}（${session.actIndex + 1}/${group.acts.length}）`);
     } else {
-      lines.push("停止中");
+      lines.push(`停止中（${group.name}）`);
     }
-    const preview = group.acts.slice(0, 4).map((a, i) => {
-      const label = a.name || `time${i + 1}`;
-      return `${i + 1}. ${label} ${a.amount}${UNIT_LABEL[a.unit] || "分"}`;
+    // その下：timeの一覧（実行中のtimeには ▶ を付ける）
+    group.acts.forEach((a, i) => {
+      const label = a.name || `act${i + 1}`;
+      const now = session && session.groupIndex === groupIndex && session.actIndex === i;
+      lines.push(`${now ? "▶" : "　"}${i + 1}. ${label} ${a.amount}${UNIT_LABEL[a.unit] || "分"}`);
     });
-    lines.push(...preview);
-    if (group.acts.length > 4) lines.push(`…他${group.acts.length - 4}件`);
     return lines.join("\n");
   }
   function renderMtQuickRow() {
@@ -965,7 +962,6 @@
   // ---- 初期化 ----
   loadState();
   applyTheme();
-  renderQuickButtons();
   renderMtQuickRow();
   render();
 

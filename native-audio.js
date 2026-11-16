@@ -165,18 +165,14 @@ function requireBackend() {
   return backend;
 }
 
-// マイク（録音・eMultimedia）のミュートを反転する。反転後に「ミュート中」ならtrue。
-function toggleMicMute() { return requireBackend().toggleMute(1, 1); }
-
-// いまの実際のミュート状態を返す。分からないものは null（従来のPowerShell版と同じ role：スピーカー=0、マイク=1）
+// いまの実際のスピーカーのミュート状態を返す。分からなければ例外（呼び出し側がPowerShell方式で再確認する）。
+// マイクは、専用スレッド（mic-worker.js）で読むので、ここ（メインスレッド）では読まない。
 function readStates() {
   const b = requireBackend();
-  const one = (flow, role) => { try { return b.getMute(flow, role); } catch (e) { return null; } };
-  const speaker = one(0, 0);
-  const mic = one(1, 1);
-  // 両方とも取れなかったときは「動かなかった」とみなして例外にする（→ 呼び出し側がPowerShell方式で再確認する）
-  if (speaker === null && mic === null) throw new Error("could not read mute states");
-  return { speaker, mic };
+  let speaker = null;
+  try { speaker = b.getMute(0, 0); } catch (e) { speaker = null; }
+  if (speaker === null) throw new Error("could not read mute states");
+  return { speaker, mic: null };
 }
 
-module.exports = { available, toggleMicMute, readStates, createBackend };
+module.exports = { available, readStates, createBackend };

@@ -18,7 +18,9 @@ const fs = require("fs");
 const path = require("path");
 
 const CLI_TIMEOUT_MS = 4000;
-const STATUS_CACHE_MS = 2500;
+const STATUS_CACHE_MS = 8000;      // 成功した結果を使い回す時間（tailscale.exe の起動回数を減らす）
+const FAIL_CACHE_MS = 1000;        // 失敗した結果は短く（1回の失敗が長く尾を引かないように）
+const UNKNOWN_RELOAD_MIN_MS = 1000; // 見たことのない相手のときの読み直しは、最短でこの間隔
 
 // ---- Tailscaleの実行ファイルの場所 ----
 function candidateCliPaths() {
@@ -89,7 +91,7 @@ function normPeer(p, suffix) {
 }
 // tailscale status --json → 使いやすい形に
 function parseStatus(json) {
-  if (!json || typeof json !== "object") return { ok: false, reason: "error" };
+  if (!json || typeof json !== "object") return { ok: false, reason: "error", transient: true };
   const backend = String(json.BackendState || "");
   const self = json.Self && typeof json.Self === "object" ? json.Self : null;
   const suffix = String(json.MagicDNSSuffix || (json.CurrentTailnet && json.CurrentTailnet.MagicDNSSuffix) || "");
@@ -114,7 +116,9 @@ function parseStatus(json) {
   else if (backend === "Stopped") reason = "stopped";
   else if (backend === "Starting" || backend === "NoState") reason = "starting";
   else if (backend === "Running" && !selfIp) reason = "no-ip";
-  return Object.assign({ ok: false, reason }, out);
+  // 停止・要ログインは「確定した状態」。それ以外（起動中・番号なし・不明）は一時的な不調の可能性があるので transient。
+  const transient = !(reason === "needs-login" || reason === "stopped");
+  return Object.assign({ ok: false, reason, transient }, out);
 }
 // 経路：CurAddrがあれば direct、なければ PeerRelay / Relay（中継）。Tailscale公式のstatus表示と同じ判定。
 function classifyPath(p) {
@@ -126,7 +130,7 @@ function classifyPath(p) {
 }
 // 接続してきた相手（IPアドレス）が、このPCと同じアカウントの端末か
 function judgePeer(st, ip) {
-  if (!st || !st.ok) return { ok: false, reason: "tailscale-down" };
+  if (!st || !st.ok) return { ok: false, reason: "tailscale-down", transient: !!(st && st.transient) };
   if (!isTailnetV4(ip)) return { ok: false, reason: "not-tailnet" };
   const p = st.peers.find((x) => x.ips.indexOf(ip) !== -1);
   if (!p) return { ok: false, reason: "unknown-peer" };
@@ -144,16 +148,18 @@ function createClient(opts) {
   let inflight = null;
   async function load(force) {
     const now = Date.now();
-    if (!force && cache && now - cacheAt < STATUS_CACHE_MS) return cache;
+    const ttl = cache && cache.ok ? STATUS_CACHE_MS : FAIL_CACHE_MS;
+    if (!force && cache && now - cacheAt < ttl) return cache;
     if (inflight) return inflight;
     inflight = (async () => {
       const r = await run(["status", "--json"]);
       let out;
-      if (!r.ok) out = { ok: false, reason: r.notInstalled ? "not-installed" : "not-running" };
+      // 入っていない＝確定。実行の失敗・時間切れは、PCが重いだけの可能性があるので transient（一時的）として扱う
+      if (!r.ok) out = { ok: false, reason: r.notInstalled ? "not-installed" : "not-running", transient: !r.notInstalled };
       else {
         let j = null;
         try { j = JSON.parse(r.stdout); } catch (e) { j = null; }
-        out = j ? parseStatus(j) : { ok: false, reason: "error" };
+        out = j ? parseStatus(j) : { ok: false, reason: "error", transient: true };
       }
       cache = out;
       cacheAt = Date.now();
@@ -164,10 +170,16 @@ function createClient(opts) {
   return {
     // いまの状態（毎回、最新を取る）
     status: () => load(true),
-    // 接続してきた相手の確認（短いキャッシュを使う）
-    async peerFor(ip) { return judgePeer(await load(false), ip); },
-    // 接続の経路の確認（最新を取る）
-    async routeFor(ip) { return judgePeer(await load(true), ip); },
+    // 接続してきた相手の確認（キャッシュを使う）。キャッシュに載っていない相手のときだけ、最短1秒おきに読み直す
+    async peerFor(ip) {
+      const j = judgePeer(await load(false), ip);
+      if (j.reason === "unknown-peer" && Date.now() - cacheAt >= UNKNOWN_RELOAD_MIN_MS) return judgePeer(await load(true), ip);
+      return j;
+    },
+    // いまの状態（キャッシュを使う。待機中の定期確認用）
+    statusCached: () => load(false),
+    // 接続の経路・相手の確認（定期確認用。キャッシュを使うので、tailscale.exe の起動は約8秒に1回まで）
+    async routeFor(ip) { return judgePeer(await load(false), ip); },
   };
 }
 
