@@ -1,0 +1,50 @@
+# Launch-K：GitHub上のWindows環境でインストーラーを作る
+# （手元のPCの Smart App Control に、ビルド中の仮のexeを止められないようにするため）
+#   ・タグ（例：v1.2.7）を push すると、ビルドして、GitHubのリリースに公開する
+#   ・Actions の画面から手動で実行すると、公開せずに、ビルドだけして、ファイルをダウンロードできる
+name: Build Windows installer
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # リリースに公開するため
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build (publish only when a tag is pushed)
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"   # 署名はしない
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            npx electron-builder --win --publish always
+          else
+            npx electron-builder --win --publish never
+          fi
+
+      - name: Upload build files
+        uses: actions/upload-artifact@v4
+        with:
+          name: launchk-windows
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/latest.yml
+          if-no-files-found: error

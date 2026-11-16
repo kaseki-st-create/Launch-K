@@ -1,12 +1,12 @@
 {
   "name": "launch-k",
   "productName": "Launch-K",
-  "version": "1.2.5",
+  "version": "1.2.7",
   "description": "個人用ランチャーデスクトップアプリ",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "set CSC_IDENTITY_AUTO_DISCOVERY=false&&electron-builder"
+    "build": "set CSC_IDENTITY_AUTO_DISCOVERY=false&&node scripts/build-win.js"
   },
   "devDependencies": {
     "electron": "^44.9.1",
@@ -24,11 +24,18 @@
       "releaseType": "release"
     },
     "asarUnpack": [
-      "node_modules/koffi/**/*"
+      "node_modules/koffi/**/*",
+      "mic-worker.js",
+      "mic-backend.js",
+      "mic-core.js",
+      "mic-props.js"
     ],
     "files": [
       "**/*",
-      "!dist/**"
+      "!dist/**",
+      "!tools/**",
+      "!docs/**",
+      "!scripts/**"
     ],
     "win": {
       "target": "nsis",
