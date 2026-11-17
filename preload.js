@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld("api", {
   openTimer: (seconds) => ipcRenderer.invoke("timer:open", seconds),
   takeUpdatedNotice: () => ipcRenderer.invoke("app:takeUpdatedNotice"),
   openGuide: () => ipcRenderer.invoke("guide:open"),
+  openSetupGuide: () => ipcRenderer.invoke("guide:openSetup"),
   openShortcuts: () => ipcRenderer.invoke("shortcuts:open"),
   getAppVersion: () => ipcRenderer.invoke("app:getVersion"),
   checkForUpdates: () => ipcRenderer.invoke("app:checkForUpdates"),

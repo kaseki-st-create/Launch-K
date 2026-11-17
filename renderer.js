@@ -3923,17 +3923,8 @@ function renderSettingsPanel() {
     <div class="settings-section boxed">
       <h3>📱 スマホから操作</h3>
       <button class="btn default" id="launch0OpenBtn" style="width:100%;">📱 Launch-0（スマホから操作する）</button>
-      <div class="path-preview" style="margin-top:8px;margin-bottom:0;line-height:1.7;">ショートカットキー Ctrl+Shift+Alt+K でも開けます。初めて使うときは、Launch-pass（4桁の数字）を決めます。</div>
-    </div>
-    <div class="settings-section boxed">
-      <h3>📶 Tailscaleの導入手順</h3>
-      <div class="path-preview" style="margin:0;line-height:1.7;">
-        ① PCで tailscale.com/download からWindows版を入れて、アカウント（Google・Microsoft・Apple など）でログインします。<br>
-        ② iPhoneでApp Storeから「Tailscale」を入れ、PCと同じアカウントでログインして、オンにします。<br>
-        ③ 上の「Launch-0」を開き、「Tailscale：使えます」と出ることを確認します（出ないときは「再確認」）。<br>
-        ④ Launch-passを決めて「QRを表示」を押し、スマホで読み取ります。使っている間は、PCとiPhoneの両方でTailscaleをオンにしておきます。
-      </div>
-      <div class="link-row" id="tailscaleGuideLink" style="margin-top:6px;">📖 くわしい使い方を見る</div>
+      <div class="path-preview" style="margin-top:8px;margin-bottom:0;line-height:1.7;">ショートカットキー Ctrl+Shift+Alt+K で開くことが可能。</div>
+      <button class="btn default" id="setupGuideBtn" style="width:100%;margin-top:10px;line-height:1.5;">📶 スマホから操作の手順<br>（Tailscaleの導入手順）</button>
     </div>
     <div class="settings-section">
       <div class="toggle-row"><span>タイトル（Launch-K）を表示${scope}</span><input type="checkbox" id="showTitleChk" ${pt.showTitle === true ? "checked" : ""} /></div>
@@ -4375,7 +4366,7 @@ function renderSettingsPanel() {
 
   document.getElementById("resetAllBtn").addEventListener("click", openConfirmReset);
   document.getElementById("launch0OpenBtn").addEventListener("click", () => { closeSettingsPanel(); openLaunch0Confirm(); });
-  document.getElementById("tailscaleGuideLink").addEventListener("click", () => window.api.openGuide());
+  document.getElementById("setupGuideBtn").addEventListener("click", () => window.api.openSetupGuide());
 }
 
 // ---------- 画面追加：新しい画面の設定の作り方を選ぶ ----------
@@ -4440,7 +4431,7 @@ function openRemovePageModal() {
     for (let i = 0; i < settings.pageCount; i++) {
       const b = document.createElement("div");
       b.className = "opt-btn" + (target === i ? " active" : "");
-      b.textContent = `画面${i + 1}`;
+      b.textContent = `画面${i + 1}` + (i === WINDOW_PAGE_INDEX ? "（いま）" : "");
       b.addEventListener("click", () => { target = i; render(); });
       row.appendChild(b);
     }
@@ -4449,7 +4440,21 @@ function openRemovePageModal() {
   };
   render();
   document.getElementById("cancelRemovePage").addEventListener("click", closeModal);
-  document.getElementById("confirmRemovePage").addEventListener("click", async () => {
+  // 1回目の「削除する」では消さず、「本当に消しますか？」の2回目の確認を出す
+  document.getElementById("confirmRemovePage").addEventListener("click", () => openRemovePageFinalConfirm(target));
+  overlayEl.classList.add("show");
+}
+
+// 画面の削除：2回目の確認（ここで「削除する」を押したときだけ、実際に削除する）
+function openRemovePageFinalConfirm(target) {
+  const count = tiles.filter((t) => (t.pageIndex || 0) === target).length;
+  const here = target === WINDOW_PAGE_INDEX ? "（いま開いているこの画面です）" : "";
+  modalBodyEl.innerHTML = `
+    <p style="font-size:14px;color:var(--text);margin-bottom:18px;line-height:1.7;">本当に画面${target + 1}${here}を削除しますか？<br>画面${target + 1}の設定と、登録済みのボタン（${count}個）がすべて消え、元に戻せません。</p>
+    <div class="modal-actions"><button class="btn default" id="cancelRemovePage2">キャンセル</button><button class="btn danger" id="confirmRemovePage2">削除する</button></div>
+  `;
+  document.getElementById("cancelRemovePage2").addEventListener("click", closeModal);
+  document.getElementById("confirmRemovePage2").addEventListener("click", async () => {
     const res = await window.api.removePage(target);
     closeModal();
     if (res && res.error) { showToast(res.error); return; }

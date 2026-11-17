@@ -89,11 +89,24 @@ console.log("[ハンバーガーメニューの並び]");
 {
   const a = src.indexOf("function renderSettingsPanel");
   const body = src.slice(a, src.indexOf("\nfunction ", a + 10));
-  const iPhone = body.indexOf("📱 スマホから操作"), iTail = body.indexOf("📶 Tailscaleの導入手順"), iFirst = body.indexOf("タイトル（Launch-K）を表示"), iShift = body.indexOf("画面切替");
-  ok(iPhone > 0 && iPhone < iTail && iTail < iFirst && iFirst < iShift, "「スマホから操作」が最上部、その下に「Tailscaleの導入手順」、そのあとに、ほかの設定");
-  ok(/<div class="settings-section boxed">\s*<h3>📱 スマホから操作<\/h3>/.test(body) && /<div class="settings-section boxed">\s*<h3>📶 Tailscaleの導入手順<\/h3>/.test(body), "2つとも枠（boxed）で囲まれている");
-  ok((body.match(/id="launch0OpenBtn"/g) || []).length === 1 && (body.match(/id="tailscaleGuideLink"/g) || []).length === 1, "ボタンは1つずつ（重複なし）");
-  ok(/tailscale\.com\/download/.test(body) && /Launch-pass/.test(body), "Tailscaleの手順に、入手先とLaunch-passの案内がある");
+  const iPhone = body.indexOf("📱 スマホから操作"), iFirst = body.indexOf("タイトル（Launch-K）を表示"), iShift = body.indexOf("画面切替");
+  ok(iPhone > 0 && iPhone < iFirst && iFirst < iShift, "「スマホから操作」が最上部、そのあとに、ほかの設定");
+  ok(/<div class="settings-section boxed">\s*<h3>📱 スマホから操作<\/h3>/.test(body), "「スマホから操作」は枠（boxed）で囲まれている");
+  ok((body.match(/id="launch0OpenBtn"/g) || []).length === 1, "Launch-0のボタンは1つ（重複なし）");
+  ok(body.indexOf("ショートカットキー Ctrl+Shift+Alt+K で開くことが可能。") > 0 && body.indexOf("でも開けます") < 0, "Launch-0の説明が「で開くことが可能。」になっている");
+  ok(body.indexOf("<h3>📶 Tailscaleの導入手順</h3>") < 0 && body.indexOf("tailscaleGuideLink") < 0 && src.indexOf("tailscaleGuideLink") < 0, "メニュー内に、旧いTailscale導入手順の枠は無い（旧リンクの処理も残っていない）");
+  ok(/id="setupGuideBtn"/.test(body) && body.indexOf("スマホから操作の手順<br>（Tailscaleの導入手順）") > 0 && body.indexOf("setupGuideBtn") > body.indexOf("launch0OpenBtn"), "Launch-0ボタンの下に「スマホから操作の手順」ボタンがある");
+  ok(/openSetupGuide\(\)/.test(src), "押すと、手順のウィンドウを開く");
+}
+console.log("[画面の削除]");
+{
+  const a = src.indexOf("function openRemovePageModal");
+  const body = src.slice(a, src.indexOf("\n// ----------", a + 10));
+  ok(/let target = WINDOW_PAGE_INDEX;/.test(body), "最初に選ばれているのは、いま開いている画面");
+  const h1 = body.slice(body.indexOf('getElementById("confirmRemovePage")'), body.indexOf("function openRemovePageFinalConfirm"));
+  ok(h1.indexOf("openRemovePageFinalConfirm(target)") >= 0 && h1.indexOf("window.api.removePage") < 0, "1回目の「削除する」では、まだ削除しない");
+  const fc = body.slice(body.indexOf("function openRemovePageFinalConfirm"));
+  ok(fc.indexOf("本当に画面") > 0 && fc.indexOf("window.api.removePage(target)") > 0 && fc.indexOf("cancelRemovePage2") > 0, "2回目の確認「本当に画面Nを削除しますか？」があり、そこで初めて削除する");
 }
 console.log(`\n${pass} 件成功 / ${fail} 件失敗`);
 process.exit(fail ? 1 : 0);

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
+<title>スマホから操作の手順</title>
+<style>
+  :root {
+    --bg: #17181c;
+    --panel: #1f2126;
+    --panel-alt: #26282e;
+    --border: #33353c;
+    --text: #f2f2f4;
+    --text-muted: #9b9ea6;
+    --accent: #6c8bff;
+    --accent-contrast: #10121a;
+    --danger: #ff6b5e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+    overflow: hidden;
+  }
+  .frame { display: flex; flex-direction: column; height: 100%; border: 1px solid var(--border); overflow: hidden; }
+  .title-bar {
+    -webkit-app-region: drag;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 8px 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .title-bar .label { font-size: 12px; color: var(--text-muted); letter-spacing: 1px; }
+  .title-bar .btns { display: flex; gap: 6px; -webkit-app-region: no-drag; }
+  .icon-btn {
+    width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--border);
+    background: var(--panel-alt); color: var(--text-muted); font-size: 13px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .icon-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+  .icon-btn:hover { color: var(--text); }
+  .icon-btn.close-btn:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+  .body {
+    flex: 1; overflow-y: auto; padding: 16px 18px 20px;
+  }
+  .body::-webkit-scrollbar { width: 8px; }
+  .body::-webkit-scrollbar-thumb { background: var(--panel-alt); border-radius: 4px; }
+  .guide-line {
+    font-size: 13px; line-height: 1.7; color: var(--text); margin-bottom: 14px;
+  }
+  .guide-card { border: 1px solid var(--accent); background: var(--panel); border-radius: 12px; padding: 12px 14px 2px; margin-bottom: 16px; }
+  .guide-card-title { margin: 0 0 10px; font-size: 14px; font-weight: 700; color: var(--accent); }
+  .guide-card .guide-line:last-child { margin-bottom: 12px; }
+  .guide-copy { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="title-bar">
+      <span class="label">📶 スマホから操作の手順</span>
+      <div class="btns">
+        <div class="icon-btn" id="lockBtn" title="常に最前面に表示">🔓</div>
+        <div class="icon-btn close-btn" id="closeBtn" title="閉じる">✕</div>
+      </div>
+    </div>
+    <div class="body" id="bodyEl"></div>
+  </div>
+
+<script>
+  // 「スマホから操作の手順（Tailscaleの導入手順）」の内容。上から順に、枠（カード）で表示する。
+  // titleが空のカードは、見出しなしの枠になる。
+  const GUIDE_CARDS = [
+    { title: "📱 スマホから操作", lines: ["スマホからこのPCを、アプリ経由で動かせるようにします。"] },
+    { title: "📶 Tailscaleの導入手順", lines: [
+      "📶 Tailscaleの導入手順：",
+      "①PCで https://tailscale.com/download からWindows版をインストールし、アカウント（Google・Microsoft・Apple など）でログインします。",
+      "②スマホでApp StoreやGoogle Playなどから「Tailscale」を入れ、PCと同じアカウントでログインして、オンにします。",
+      "③Launch-0を開き、「Tailscale：使えます」と表示されることを確認します（出ないときは「再確認」。スマホから届かないときは「許可を追加」）。",
+      "④Launch-passを決めて「QRを表示」を押し、スマホでQRを読み取ります。使っている間は、PCとiPhoneの両方でTailscaleとVPNをオンにしておいてください。",
+      "🔒 Launch-0の接続方法：Tailscaleだけです。Tailscaleは、PCとスマホに無料のTailscaleアプリを入れて、同じアカウントでログインしておく方法です。通信が暗号化(VPNを通る)され、外出先や、Wi-Fiが違う場所でも使えます。PCのTailscale用の番号でだけ待ち受け、PCと同じアカウントの端末だけが接続できます（使っている間は、スマホのTailscaleとVPNをオンにしてください）。接続の経路は「direct（直接）」か「relay（中継サーバー経由）」で表示されます。スマホのブラウザのアドレス欄に「安全ではありません」と出ることがありますが、これはアドレスが https ではないためです。通信そのものはTailscaleで暗号化されています。",
+      "🧰 Launch-0がつながらないとき：Tailscaleの場合は、PCとiPhoneの両方でTailscaleがオンで、同じアカウントでログインしているか確認してください（PC側の状態はLaunch-0の画面に表示されます）。スマホから届かないときは、Launch-0の画面の「許可を追加」（Windowsファイアウォール。管理者の確認が出ます。Launch-Kを入れ直すなどして場所が変わったときは、「許可を修正」と表示されます）を試してください。通信が一時的に途切れても、すぐには切断せず、つながり直すのを待ちます。パスワード入力の途中でPCが閉じられたときや、通信が途切れて切断されたときは、スマホにも理由が表示されます。iPhone以外の端末（Androidなど）は動作の確認をしていないため、PCの許可画面に「動作の確認をしていません」と表示されます。注意としては、大学などのWi-Fiにスマホ側がつながっていると、スマホからの操作はできなくなります。これはどうしようもないのです。。。スマホをモバイル通信にすると解決します。",
+    ] },
+    { title: "", lines: [
+      "📱 Launch-0（スマホから操作）：",
+      "ハンバーガーメニューの一番上の「Launch-0」か、ショートカットキー Ctrl+Shift+Alt+K で開きます。開くと、いまの画面はすべて閉じます。PCで開いているのはLaunch-0だけになります（ボタンの編集やショートカットキーも使えません）。初めて使うときは、最初の画面で「Launch-pass」（4桁の数字）を決めます。決めないと、スマホには接続できません（忘れたときは、接続の前に「変更」で決め直せます）。そのうえで、スマホで最初に表示する画面を選び、「QRを表示」→スマホでQRを読み取り→PCに表示された6文字のパスワード（英小文字4文字＋数字2文字）をスマホに入力→PCで端末を確認して「許可」を押す（Enterキーでも許可できます。）と接続されます。アカウント名は最初は伏せ字（●）で表示され、(- -) のボタンを押すと表示、(o_o) のボタンを押すと隠せます。接続できるのは1台までです。終わったら、PCの「切断」か、スマホのメニュー（☰）の「接続を切断」で終了します。終了するとLaunch-0は閉じて、画面1に戻ります。",
+      "🛡 Launch-0の安全のしくみ：QRとパスワードは45秒ごとに新しくなります（切り替え直後だけ、直前の分も30秒有効）。パスワードを合計3回間違えると、QRごと作り直されます。QRを表示して90秒たっても誰も接続しなければ、Launch-0は自動で閉じて画面1に戻ります。PCで「許可」を押さないと操作できません。接続から3時間で切断され、PCのネットワークの変更・再起動・シャットダウンでも切断されます。",
+      "⏱ 接続中の自動切断・ロック・注意：",
+      "【無操作】15分で「注意」（あと何分でロックされるか）、30分でスマホのボタンが使えなくなりLaunch-pass（4桁）の入力が必要になり、60分で自動的に切断します（PCの「このまま続ける」でも解除できます）。",
+      "【スマホの画面が裏に回っている／通信が途切れている】3分でPCの画面に「お知らせ」、5分で「注意」（自動で切断するまでのカウントダウン付き）、15分を超えて戻ったときはLaunch-passが必要、30分で自動的に切断します。短い途切れでは、Launch-passは求められません。",
+      "【PCのスリープ・休止・画面ロック】切断はしません。スマホには「PC画面がスリープ/休止によりロックされています」と出て、ボタンは使えなくなります（3分で「お知らせ」、5分で「注意」と、自動で切断するまでのカウントダウンが出ます）。15分以上続くと、PCが戻ったあとでLaunch-passが必要になり、30分で自動的に切断します。休止から戻ったときは、接続を確かめて、つながらなければ切断します。",
+      "【Launch-pass】3回続けて間違えると切断され、5分間は入力を受け付けません（間違えた回数は、つなぎ直しても引き継ぎます）。入力画面と「接続を切断」ボタンは、スマホ画面の下側にあります。スマホからは、いつでもすぐ切断できます。",
+      "📑 スマホのタブ：同じ接続を、スマホの複数のタブで開いた場合（タブの複製・URLのコピー・履歴から開いたときなど）は、いちばん新しく開いたタブだけが使えます。古いタブには「別のタブで開かれました」と出て、操作できなくなります（接続は切れません）。古いタブで使いたいときは、「このタブで使う」を押してください。",
+      "🚫 スマホから使えないボタン：Launch-Kの画面を開く操作（画面切り替え・QR）と、電源操作は、スマホからは実行できません。これらを含むマルチ操作も使えません（スマホでは薄く表示され、押しても何も起きません）。",
+      "👆 スマホでの操作：ボタンをタップすると実行されます。0.59秒以上押し続ける（長押し）と、ボタンの名前が表示されます（実行はされません。指を離して1.1秒たつと消えます）。",
+      "左上の☰を開くと「接続の安全」が見られます（初めは簡易表示で、接続先のPC名・経路・通信状態だけが出ます。見出しをタップすると詳細表示になり、Tailscaleで暗号化されているか、自動切断までの残り時間なども見られます。）。横画面では、☰の中の画面一覧が2列になり、中身を上下にスクロールできます。マイクのボタンは、一部のマイクだけ開いているときや、状態を確認できないときに、右上にオレンジの「!」が出ます。マイクが未接続のボタンは、全体が薄く表示されます。ミュート中のマイクは、画像・絵文字のアイコンには赤い斜線が付きます（どちらもPCと同じです）。",
+      "ボタンが18個を超えると、画面上部の「◀ 1 / 2 ▶」でサブページを切り替えます（縦画面は3列×6行、横画面は6列×3行）。ほかの画面への切り替えは、左上の☰から行います。背景の色は、PCの画面のテーマの色を引き継ぎます（画像の背景は引き継がず、暗い単色になります）。",
+    ] },
+  ];
+  const bodyEl = document.getElementById("bodyEl");
+  const cardsHtml = GUIDE_CARDS.map((c) => `<section class="guide-card">${c.title ? `<h2 class="guide-card-title">${c.title}</h2>` : ""}${c.lines.map((line) => `<div class="guide-line">${line}</div>`).join("")}</section>`).join("");
+  bodyEl.innerHTML = cardsHtml + `<div class="guide-copy">© kaseki</div>`;
+
+  const lockBtn = document.getElementById("lockBtn");
+  const closeBtn = document.getElementById("closeBtn");
+  // メインウィンドウのロックボタンと同じ仕様：既定はオフ（🔓）、押すたびにオン/オフを切り替える。
+  let locked = false;
+  lockBtn.addEventListener("click", () => {
+    locked = !locked;
+    lockBtn.classList.toggle("active", locked);
+    lockBtn.textContent = locked ? "🔒" : "🔓";
+    window.guideApi.setAlwaysOnTop(locked);
+  });
+  closeBtn.addEventListener("click", () => window.guideApi.close());
+</script>
+</body>
+</html>

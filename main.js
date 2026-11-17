@@ -102,12 +102,12 @@ function allAppWindows() {
 }
 // 自アプリの全ウィンドウのネイティブハンドル（Launch-0を含む）。分割・フォーカスの対象から除外するために使う。
 function ownNativeHandles() {
-  return [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, launch0Window, ...pageWindows.values()]
+  return [mainWindow, timerWindow, guideWindow, setupGuideWindow, shortcutsWindow, tooltipWindow, launch0Window, ...pageWindows.values()]
     .map(getNativeHwnd)
     .filter((h) => h !== null);
 }
 function isOwnWindowHwnd(hwnd) {
-  return [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, launch0Window, ...pageWindows.values()]
+  return [mainWindow, timerWindow, guideWindow, setupGuideWindow, shortcutsWindow, tooltipWindow, launch0Window, ...pageWindows.values()]
     .map(getNativeHwnd)
     .some((h) => h !== null && h === hwnd);
 }
@@ -717,7 +717,7 @@ async function prepareQuitForUpdate() {
   } catch (e) { note("remove tray failed:", String(e && e.message)); }
   let destroyed = 0;
   try { if (remote) remote.shutdown("app-quit"); note("remote stopped"); } catch (e) { /* 無視 */ }
-  const wins = [mainWindow, timerWindow, guideWindow, shortcutsWindow, tooltipWindow, launch0Window, ...pageWindows.values()];
+  const wins = [mainWindow, timerWindow, guideWindow, setupGuideWindow, shortcutsWindow, tooltipWindow, launch0Window, ...pageWindows.values()];
   for (const w of wins) {
     try {
       if (w && !w.isDestroyed()) { w.destroy(); destroyed++; }
@@ -2404,11 +2404,55 @@ ipcMain.handle("guide:open", () => {
   createOrShowGuideWindow();
   return true;
 });
+// 「使い方」と「スマホから操作の手順」は同じ部品（guide-preload.js）を使うので、
+// ロック・閉じるは、押したウィンドウ自身に対して行う。
 ipcMain.on("guide:setAlwaysOnTop", (event, val) => {
-  if (guideWindow && !guideWindow.isDestroyed()) guideWindow.setAlwaysOnTop(!!val, "screen-saver");
+  const w = BrowserWindow.fromWebContents(event.sender);
+  if (w && !w.isDestroyed()) w.setAlwaysOnTop(!!val, "screen-saver");
 });
-ipcMain.on("guide:close", () => {
-  if (guideWindow && !guideWindow.isDestroyed()) guideWindow.close();
+ipcMain.on("guide:close", (event) => {
+  const w = BrowserWindow.fromWebContents(event.sender);
+  if (w && !w.isDestroyed()) w.close();
+});
+
+// ---- 「スマホから操作の手順（Tailscaleの導入手順）」専用のミニウィンドウ ----
+// ・「使い方」と同じ作り（テキストのみ・ハンバーガーメニューなし）。ロック（常に最前面）は既定オフ
+let setupGuideWindow = null;
+function createOrShowSetupGuideWindow() {
+  if (remoteActive) return;
+  if (setupGuideWindow && !setupGuideWindow.isDestroyed()) {
+    setupGuideWindow.show();
+    setupGuideWindow.focus();
+    return;
+  }
+  setupGuideWindow = new BrowserWindow({
+    width: 460,
+    height: 560,
+    minWidth: 280,
+    minHeight: 260,
+    resizable: true,
+    minimizable: true,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: false,
+    frame: false,
+    show: false,
+    title: "スマホから操作の手順",
+    icon: process.platform === "win32" ? path.join(__dirname, "assets", "icon.ico") : undefined,
+    webPreferences: {
+      preload: path.join(__dirname, "guide-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  setupGuideWindow.setMenuBarVisibility(false);
+  setupGuideWindow.loadFile("setup-guide.html");
+  setupGuideWindow.once("ready-to-show", () => setupGuideWindow.show());
+  setupGuideWindow.on("closed", () => { setupGuideWindow = null; });
+}
+ipcMain.handle("guide:openSetup", () => {
+  createOrShowSetupGuideWindow();
+  return true;
 });
 
 // ---- ショートカットの一覧（一覧を見るだけの別ウィンドウ）----
@@ -2539,7 +2583,7 @@ function openLaunch0() {
   } catch (e) { /* 既定の大きさのまま */ }
   // 他の画面をすべて閉じる（画面1はトレイに隠すだけ。終了後に再表示する）
   for (const w of [...pageWindows.values()]) { try { if (w && !w.isDestroyed()) w.close(); } catch (e) { /* 無視 */ } }
-  for (const w of [timerWindow, guideWindow, shortcutsWindow]) { try { if (w && !w.isDestroyed()) w.close(); } catch (e) { /* 無視 */ } }
+  for (const w of [timerWindow, guideWindow, setupGuideWindow, shortcutsWindow]) { try { if (w && !w.isDestroyed()) w.close(); } catch (e) { /* 無視 */ } }
   try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide(); } catch (e) { /* 無視 */ }
 
   const win = new BrowserWindow({
@@ -3078,7 +3122,7 @@ ipcMain.handle("capture:screen", async (event, kind) => {
     const [cw, ch] = refWin ? refWin.getContentSize() : [960, 680];
     aspect = ch > 0 ? cw / ch : 960 / 680;
   }
-  const hidden = [mainWindow, timerWindow, guideWindow, shortcutsWindow, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
+  const hidden = [mainWindow, timerWindow, guideWindow, setupGuideWindow, shortcutsWindow, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
   const refWasHidden = !!refWin && hidden.includes(refWin);
   try {
     hideTooltip(true);
@@ -3166,7 +3210,7 @@ ipcMain.handle("capture:fullScreenshot", async (event) => {
   const refWin = (callerWin && !callerWin.isDestroyed()) ? callerWin : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
   const display = refWin ? screen.getDisplayMatching(refWin.getBounds()) : screen.getPrimaryDisplay();
   // Launch-0（スマホから撮影を実行したとき、前面に出ている）も映り込まないよう隠す
-  const hidden = [mainWindow, timerWindow, guideWindow, shortcutsWindow, launch0Window, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
+  const hidden = [mainWindow, timerWindow, guideWindow, setupGuideWindow, shortcutsWindow, launch0Window, ...pageWindows.values()].filter((w) => w && !w.isDestroyed() && w.isVisible());
   try {
     hideTooltip(true);
     hidden.forEach((w) => w.hide());

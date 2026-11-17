@@ -1,6 +1,6 @@
 # Launch-K：GitHub上のWindows環境でインストーラーを作る
 # （手元のPCの Smart App Control に、ビルド中の仮のexeを止められないようにするため）
-#   ・タグ（例：v1.2.7）を push すると、ビルドして、GitHubのリリースに公開する
+#   ・タグ（例：v1.2.8）を push すると、ビルドして、GitHubのリリースに公開する
 #   ・Actions の画面から手動で実行すると、公開せずに、ビルドだけして、ファイルをダウンロードできる
 name: Build Windows installer
 
